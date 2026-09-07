@@ -19,3 +19,11 @@ about building PostgreSQL from the source code can be found at
 The latest version of this software, and related software, may be
 obtained at <https://www.postgresql.org/download/>.  For more information
 look at our web site located at <https://www.postgresql.org/>.
+
+Chronos database branching
+==========================
+
+This source tree implements Chronos interval-based database branching. See
+[BRANCHING.md](BRANCHING.md) for setup and everyday use. See
+[CHRONOS_VERSIONING.md](CHRONOS_VERSIONING.md) for the versioning algorithm and
+PostgreSQL implementation details.
