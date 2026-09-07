@@ -2972,6 +2972,10 @@ transformUpdateTargetList(ParseState *pstate, List *origTlist, ForPortionOfExpr 
 
 		attrno = attnameAttNum(pstate->p_target_relation,
 							   origTarget->name, true);
+		if (attrno != InvalidAttrNumber &&
+			TupleDescAttr(RelationGetDescr(pstate->p_target_relation),
+							  attrno - 1)->attishidden)
+			attrno = InvalidAttrNumber;
 		if (attrno == InvalidAttrNumber)
 			ereport(ERROR,
 					(errcode(ERRCODE_UNDEFINED_COLUMN),

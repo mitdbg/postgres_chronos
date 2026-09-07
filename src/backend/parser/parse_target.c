@@ -16,6 +16,7 @@
 
 #include "catalog/namespace.h"
 #include "catalog/pg_type.h"
+#include "commands/branchcmds.h"
 #include "funcapi.h"
 #include "miscadmin.h"
 #include "nodes/makefuncs.h"
@@ -1040,7 +1041,7 @@ checkInsertTargets(ParseState *pstate, List *cols, List **attrnos)
 
 			attr = TupleDescAttr(pstate->p_target_relation->rd_att, i);
 
-			if (attr->attisdropped)
+			if (attr->attisdropped || attr->attishidden)
 				continue;
 
 			col = makeNode(ResTarget);
@@ -1069,6 +1070,11 @@ checkInsertTargets(ParseState *pstate, List *cols, List **attrnos)
 
 			/* Lookup column name, ereport on failure */
 			attrno = attnameAttNum(pstate->p_target_relation, name, false);
+			if (attrno != InvalidAttrNumber &&
+				TupleDescAttr(RelationGetDescr(pstate->p_target_relation),
+							  attrno - 1)->attishidden &&
+				!BranchSchemaCopyInProgress())
+				attrno = InvalidAttrNumber;
 			if (attrno == InvalidAttrNumber)
 				ereport(ERROR,
 						(errcode(ERRCODE_UNDEFINED_COLUMN),
@@ -1482,7 +1488,7 @@ ExpandRowReference(ParseState *pstate, Node *expr,
 		Form_pg_attribute att = TupleDescAttr(tupleDesc, i);
 		FieldSelect *fselect;
 
-		if (att->attisdropped)
+		if (att->attisdropped || att->attishidden)
 			continue;
 
 		fselect = makeNode(FieldSelect);

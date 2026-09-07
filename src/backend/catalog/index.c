@@ -27,6 +27,7 @@
 #include "access/attmap.h"
 #include "access/heapam.h"
 #include "access/multixact.h"
+#include "access/nbtree.h"
 #include "access/relscan.h"
 #include "access/tableam.h"
 #include "access/toast_compression.h"
@@ -54,6 +55,7 @@
 #include "catalog/storage.h"
 #include "catalog/storage_xlog.h"
 #include "commands/event_trigger.h"
+#include "commands/branchcmds.h"
 #include "commands/progress.h"
 #include "commands/tablecmds.h"
 #include "commands/trigger.h"
@@ -3252,6 +3254,10 @@ IndexCheckExclusion(Relation heapRelation,
 	EState	   *estate;
 	ExprContext *econtext;
 	Snapshot	snapshot;
+	List	   *points;
+	ListCell   *lc;
+	BranchCoordinate savedpoint;
+	bool		versioned;
 
 	/*
 	 * If we are reindexing the target index, mark it as no longer being
@@ -3274,53 +3280,82 @@ IndexCheckExclusion(Relation heapRelation,
 
 	/* Set up execution state for predicate, if any. */
 	predicate = ExecPrepareQual(indexInfo->ii_Predicate, estate);
+	versioned = BranchRelationIsVersioned(heapRelation);
+	if (versioned)
+	{
+		BranchEnsureSession();
+		savedpoint = MyBranchPoint;
+		points = BranchGetActivePoints();
+	}
+	else
+		points = list_make1(NULL);
 
 	/*
-	 * Scan all live tuples in the base relation.
+	 * Scan all live tuples in the base relation once per active branch.  An
+	 * outer tuple and every conflict candidate must be visible at the same
+	 * branch point; otherwise disjoint interval versions would be compared.
 	 */
 	snapshot = RegisterSnapshot(GetLatestSnapshot());
-	scan = table_beginscan_strat(heapRelation,	/* relation */
-								 snapshot,	/* snapshot */
-								 0, /* number of keys */
-								 NULL,	/* scan key */
-								 true,	/* buffer access strategy OK */
-								 true); /* syncscan OK */
-
-	while (table_scan_getnextslot(scan, ForwardScanDirection, slot))
+	PG_TRY();
 	{
-		CHECK_FOR_INTERRUPTS();
-
-		/*
-		 * In a partial index, ignore tuples that don't satisfy the predicate.
-		 */
-		if (predicate != NULL)
+		foreach(lc, points)
 		{
-			if (!ExecQual(predicate, econtext))
-				continue;
+			BranchCoordinate *point = lfirst(lc);
+
+			if (point != NULL)
+				MyBranchPoint = *point;
+			scan = table_beginscan_strat(heapRelation,	/* relation */
+									 snapshot,	/* snapshot */
+									 0, /* number of keys */
+									 NULL,	/* scan key */
+									 true,	/* buffer access strategy OK */
+									 true); /* syncscan OK */
+
+			while (table_scan_getnextslot(scan, ForwardScanDirection, slot))
+			{
+				CHECK_FOR_INTERRUPTS();
+
+				if (versioned && !BranchTupleSlotIsVisible(heapRelation, slot))
+				{
+					ExecClearTuple(slot);
+					continue;
+				}
+
+				/*
+				 * In a partial index, ignore tuples that don't satisfy the
+				 * predicate.
+				 */
+				if (predicate != NULL && !ExecQual(predicate, econtext))
+				{
+					ExecClearTuple(slot);
+					continue;
+				}
+
+				/* Extract index column values, including expressions. */
+				FormIndexDatum(indexInfo, slot, estate, values, isnull);
+
+				check_exclusion_constraint(heapRelation,
+									   indexRelation, indexInfo,
+									   &(slot->tts_tid), values, isnull,
+									   estate, true);
+
+				ExecClearTuple(slot);
+				MemoryContextReset(econtext->ecxt_per_tuple_memory);
+			}
+			table_endscan(scan);
 		}
-
-		/*
-		 * Extract index column values, including computing expressions.
-		 */
-		FormIndexDatum(indexInfo,
-					   slot,
-					   estate,
-					   values,
-					   isnull);
-
-		/*
-		 * Check that this tuple has no conflicts.
-		 */
-		check_exclusion_constraint(heapRelation,
-								   indexRelation, indexInfo,
-								   &(slot->tts_tid), values, isnull,
-								   estate, true);
-
-		MemoryContextReset(econtext->ecxt_per_tuple_memory);
 	}
-
-	table_endscan(scan);
+	PG_FINALLY();
+	{
+		if (versioned)
+			MyBranchPoint = savedpoint;
+	}
+	PG_END_TRY();
 	UnregisterSnapshot(snapshot);
+	if (versioned)
+		list_free_deep(points);
+	else
+		list_free(points);
 
 	ExecDropSingleTupleTableSlot(slot);
 
@@ -3863,6 +3898,10 @@ reindex_index(const ReindexStmt *stmt, Oid indexId,
 
 	/* Re-allow use of target index */
 	ResetReindexProcessing();
+	if (!skip_constraint_checks && indexInfo->ii_Unique &&
+		BranchRelationIsVersioned(heapRelation) &&
+		iRel->rd_rel->relam == BTREE_AM_OID)
+		btvalidatebranchuniqueness(heapRelation, iRel, indexInfo);
 
 	/*
 	 * If the index is marked invalid/not-ready/dead (ie, it's from a failed

@@ -23,6 +23,7 @@
 #include "access/tupconvert.h"
 #include "catalog/pg_inherits.h"
 #include "commands/copyapi.h"
+#include "commands/branchcmds.h"
 #include "commands/progress.h"
 #include "executor/execdesc.h"
 #include "executor/executor.h"
@@ -1358,6 +1359,8 @@ CopyRelationTo(CopyToState cstate, Relation rel, Relation root_rel, uint64 *proc
 	AttrMap    *map = NULL;
 	TupleTableSlot *root_slot = NULL;
 
+	if (BranchRelationIsVersioned(rel))
+		BranchAcquireLock(AccessShareLock);
 	scandesc = table_beginscan(rel, GetActiveSnapshot(), 0, NULL,
 							   SO_NONE);
 	slot = table_slot_create(rel, NULL);
@@ -1380,6 +1383,11 @@ CopyRelationTo(CopyToState cstate, Relation rel, Relation root_rel, uint64 *proc
 		TupleTableSlot *copyslot;
 
 		CHECK_FOR_INTERRUPTS();
+		if (!BranchTupleSlotIsVisible(rel, slot))
+		{
+			ExecClearTuple(slot);
+			continue;
+		}
 
 		if (map != NULL)
 			copyslot = execute_attr_map_slot(map, slot, root_slot);

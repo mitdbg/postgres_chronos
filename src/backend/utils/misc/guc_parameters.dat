@@ -394,6 +394,23 @@
   boot_val => '""',
 },
 
+{ name => 'branch', type => 'string', context => 'PGC_USERSET', group => 'CLIENT_CONN_OTHER',
+  short_desc => 'Sets the native database branch for this session.',
+  flags => 'GUC_IS_NAME | GUC_REPORT | GUC_NOT_IN_SAMPLE',
+  variable => 'branch_name',
+  boot_val => '"main"',
+},
+
+{ name => 'branch_interval_fanout', type => 'int', context => 'PGC_USERSET', group => 'CLIENT_CONN_OTHER',
+  short_desc => 'Provides a child-fanout hint to the native branch interval allocator.',
+  long_desc => 'A value of -1 selects the adaptive unknown-fanout policy; zero or a positive value supplies an expected child fanout.',
+  flags => 'GUC_NOT_IN_SAMPLE',
+  variable => 'branch_interval_fanout',
+  boot_val => '-1',
+  min => '-1',
+  max => 'INT_MAX - 1',
+},
+
 { name => 'bytea_output', type => 'enum', context => 'PGC_USERSET', group => 'CLIENT_CONN_STATEMENT',
   short_desc => 'Sets the output format for bytea.',
   variable => 'bytea_output',

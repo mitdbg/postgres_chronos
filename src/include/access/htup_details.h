@@ -34,8 +34,10 @@
 #define MaxTupleAttributeNumber 1664	/* 8 * 208 */
 
 /*
- * MaxHeapAttributeNumber limits the number of (user) columns in a table.
- * This should be somewhat less than MaxTupleAttributeNumber.  It must be
+ * MaxUserHeapAttributeNumber is the SQL-visible column limit.
+ * MaxHeapAttributeNumber additionally reserves five physical attributes for
+ * native branch metadata.  It should be somewhat less than
+ * MaxTupleAttributeNumber.  It must be
  * at least one less, else we will fail to do UPDATEs on a maximal-width
  * table (because UPDATE has to form working tuples that include CTID).
  * In practice we want some additional daylight so that we can gracefully
@@ -45,7 +47,8 @@
  * into the disk-block-based limit on overall tuple size if you have more
  * than a thousand or so columns.  TOAST won't help.
  */
-#define MaxHeapAttributeNumber	1600	/* 8 * 200 */
+#define MaxUserHeapAttributeNumber 1600
+#define MaxHeapAttributeNumber	(MaxUserHeapAttributeNumber + 5)
 
 /*
  * Heap tuple header.  To avoid wasting space, the fields should be

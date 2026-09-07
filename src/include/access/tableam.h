@@ -1323,6 +1323,10 @@ extern bool table_index_fetch_tuple_check(Relation rel,
 										  ItemPointer tid,
 										  Snapshot snapshot,
 										  bool *all_dead);
+extern bool table_index_fetch_tuple_check_branch(Relation rel,
+											 ItemPointer tid,
+											 Snapshot snapshot,
+											 bool *all_dead);
 
 
 /* ------------------------------------------------------------------------

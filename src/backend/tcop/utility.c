@@ -26,6 +26,7 @@
 #include "catalog/toasting.h"
 #include "commands/alter.h"
 #include "commands/async.h"
+#include "commands/branchcmds.h"
 #include "commands/collationcmds.h"
 #include "commands/comment.h"
 #include "commands/conversioncmds.h"
@@ -167,6 +168,7 @@ ClassifyUtilityCommandAsReadOnly(Node *parsetree)
 		case T_CommentStmt:
 		case T_CompositeTypeStmt:
 		case T_CreateAmStmt:
+		case T_CreateBranchStmt:
 		case T_CreateCastStmt:
 		case T_CreateConversionStmt:
 		case T_CreateDomainStmt:
@@ -198,6 +200,7 @@ ClassifyUtilityCommandAsReadOnly(Node *parsetree)
 		case T_CreatedbStmt:
 		case T_DefineStmt:
 		case T_DropOwnedStmt:
+		case T_DropBranchStmt:
 		case T_DropRoleStmt:
 		case T_DropStmt:
 		case T_DropSubscriptionStmt:
@@ -777,6 +780,14 @@ standard_ProcessUtility(PlannedStmt *pstmt,
 			createdb(pstate, (CreatedbStmt *) parsetree);
 			break;
 
+		case T_CreateBranchStmt:
+			CreateBranch((CreateBranchStmt *) parsetree);
+			break;
+
+		case T_DropBranchStmt:
+			DropBranch((DropBranchStmt *) parsetree);
+			break;
+
 		case T_AlterDatabaseStmt:
 			/* no event triggers for global objects */
 			AlterDatabase(pstate, (AlterDatabaseStmt *) parsetree, isTopLevel);
@@ -877,7 +888,13 @@ standard_ProcessUtility(PlannedStmt *pstmt,
 			break;
 
 		case T_VariableSetStmt:
-			ExecSetVariableStmt((VariableSetStmt *) parsetree, isTopLevel);
+			{
+				VariableSetStmt *stmt = (VariableSetStmt *) parsetree;
+
+				ExecSetVariableStmt(stmt, isTopLevel);
+				if (stmt->name != NULL && pg_strcasecmp(stmt->name, "branch") == 0)
+					BranchEnsureSession();
+			}
 			break;
 
 		case T_VariableShowStmt:
@@ -1303,6 +1320,7 @@ ProcessUtilitySlow(ParseState *pstate,
 					 * permissions.
 					 */
 					lockmode = AlterTableGetLockLevel(atstmt->cmds);
+					BranchPrepareAlterTable(atstmt, lockmode);
 					relid = AlterTableLookupRelation(atstmt, lockmode);
 
 					if (OidIsValid(relid))
@@ -3101,6 +3119,14 @@ CreateCommandTag(Node *parsetree)
 			tag = CMDTAG_CREATE_ACCESS_METHOD;
 			break;
 
+		case T_CreateBranchStmt:
+			tag = CMDTAG_CREATE_BRANCH;
+			break;
+
+		case T_DropBranchStmt:
+			tag = CMDTAG_DROP_BRANCH;
+			break;
+
 		case T_CreatePublicationStmt:
 			tag = CMDTAG_CREATE_PUBLICATION;
 			break;
@@ -3727,6 +3753,11 @@ GetCommandLogLevel(Node *parsetree)
 			break;
 
 		case T_CreateAmStmt:
+			lev = LOGSTMT_DDL;
+			break;
+
+		case T_CreateBranchStmt:
+		case T_DropBranchStmt:
 			lev = LOGSTMT_DDL;
 			break;
 

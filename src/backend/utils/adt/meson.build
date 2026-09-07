@@ -22,6 +22,7 @@ backend_sources += files(
   'arrayutils.c',
   'ascii.c',
   'bool.c',
+  'branchcoord.c',
   'bytea.c',
   'cash.c',
   'char.c',

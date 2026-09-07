@@ -32,6 +32,7 @@
 #include "catalog/pg_trigger.h"
 #include "catalog/pg_type.h"
 #include "commands/trigger.h"
+#include "commands/branchcmds.h"
 #include "executor/executor.h"
 #include "executor/instrument.h"
 #include "miscadmin.h"
@@ -3373,6 +3374,7 @@ GetTupleForTrigger(EState *estate,
 		TM_Result	test;
 		TM_FailureData tmfd;
 		int			lockflags = 0;
+		bool		branch_relocated = false;
 
 		*epqslot = NULL;
 
@@ -3380,15 +3382,41 @@ GetTupleForTrigger(EState *estate,
 		Assert(epqstate != NULL);
 
 		/*
+		 * Interval versioning serializes a logical row independently of its
+		 * physical CTID.  Resolve that identity before locking the tuple so a
+		 * concurrent sibling update cannot lead this trigger down the sibling's
+		 * heap update chain.
+		 */
+		if (BranchRelationIsVersioned(relation) &&
+			!BranchResolveTupleForUpdate(relation, tid, oldslot,
+									 &branch_relocated))
+		{
+			MemSet(&tmfd, 0, sizeof(tmfd));
+			if (tmresultp)
+				*tmresultp = TM_Deleted;
+			if (tmfdp)
+				*tmfdp = tmfd;
+			return false;
+		}
+		if (branch_relocated && IsolationUsesXactSnapshot())
+			ereport(ERROR,
+					(errcode(ERRCODE_T_R_SERIALIZATION_FAILURE),
+					 errmsg("could not serialize access due to concurrent update")));
+
+		/*
 		 * lock tuple for update
 		 */
 		if (!IsolationUsesXactSnapshot())
 			lockflags |= TUPLE_LOCK_FLAG_FIND_LAST_VERSION;
-		test = table_tuple_lock(relation, tid, estate->es_snapshot, oldslot,
+		test = table_tuple_lock(relation, tid,
+								branch_relocated ? SnapshotSelf : estate->es_snapshot,
+								oldslot,
 								estate->es_output_cid,
 								lockmode, LockWaitBlock,
 								lockflags,
 								&tmfd);
+		if (test == TM_Ok && branch_relocated)
+			tmfd.traversed = true;
 
 		/* Let the caller know about the status of this operation */
 		if (tmresultp)

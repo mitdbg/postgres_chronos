@@ -890,6 +890,13 @@ btoid8cmp(oid8,oid8)
 bytea(uuid)
 tid_block(tid)
 tid_offset(tid)
+branchcoord_cmp(pg_branch_coord,pg_branch_coord)
+branchcoord_lt(pg_branch_coord,pg_branch_coord)
+branchcoord_le(pg_branch_coord,pg_branch_coord)
+branchcoord_eq(pg_branch_coord,pg_branch_coord)
+branchcoord_ne(pg_branch_coord,pg_branch_coord)
+branchcoord_ge(pg_branch_coord,pg_branch_coord)
+branchcoord_gt(pg_branch_coord,pg_branch_coord)
 -- Check that functions without argument are not marked as leakproof.
 SELECT p1.oid::regprocedure
 FROM pg_proc p1 JOIN pg_namespace pn
@@ -2323,3 +2330,4 @@ WHERE icoll != 0 AND
 ------------+----------+--------+-------
 (0 rows)
 
+-- end of operator sanity checks

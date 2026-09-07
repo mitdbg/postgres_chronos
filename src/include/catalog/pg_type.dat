@@ -416,6 +416,14 @@
   typinput => 'pg_lsn_in', typoutput => 'pg_lsn_out',
   typreceive => 'pg_lsn_recv', typsend => 'pg_lsn_send', typalign => 'd' },
 
+# branch interval coordinate
+{ oid => '9000', array_type_oid => '9013',
+  descr => 'coordinate in the native branch interval space',
+  typname => 'pg_branch_coord', typlen => '16', typbyval => 'f',
+  typcategory => 'U', typinput => 'branchcoord_in',
+  typoutput => 'branchcoord_out', typreceive => 'branchcoord_recv',
+  typsend => 'branchcoord_send', typalign => 'd' },
+
 # text search
 { oid => '3614', array_type_oid => '3643',
   descr => 'text representation for text search',

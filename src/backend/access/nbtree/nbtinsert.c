@@ -560,9 +560,9 @@ _bt_check_unique(Relation rel, BTInsertState insertstate, Relation heapRel,
 				 * with optimizations like heap's HOT, we have just a single
 				 * index entry for the entire chain.
 				 */
-				else if (table_index_fetch_tuple_check(heapRel, &htid,
-													   &SnapshotDirty,
-													   &all_dead))
+				else if (table_index_fetch_tuple_check_branch(heapRel, &htid,
+													  &SnapshotDirty,
+													  &all_dead))
 				{
 					TransactionId xwait;
 

@@ -23,6 +23,7 @@
 
 #include "access/tableam.h"
 #include "access/xact.h"
+#include "commands/branchcmds.h"
 #include "executor/executor.h"
 #include "executor/nodeLockRows.h"
 #include "foreign/fdwapi.h"
@@ -84,6 +85,8 @@ lnext:
 		int			lockflags = 0;
 		TM_Result	test;
 		TupleTableSlot *markSlot;
+		bool		branch_relocated = false;
+		bool		branch_would_block = false;
 
 		/* clear any leftover test tuple for this rel */
 		markSlot = EvalPlanQualSlot(&node->lr_epqstate, erm->relation, erm->rti);
@@ -182,11 +185,30 @@ lnext:
 		if (!IsolationUsesXactSnapshot())
 			lockflags |= TUPLE_LOCK_FLAG_FIND_LAST_VERSION;
 
-		test = table_tuple_lock(erm->relation, &tid, estate->es_snapshot,
+		if (BranchRelationIsVersioned(erm->relation) &&
+			!BranchResolveTupleForLock(erm->relation, &tid, markSlot,
+									   erm->waitPolicy,
+									   &branch_relocated,
+									   &branch_would_block))
+		{
+			if (branch_would_block)
+				goto lnext;
+			/* The logical row was deleted in this branch while we waited. */
+			goto lnext;
+		}
+		if (branch_relocated && IsolationUsesXactSnapshot())
+			ereport(ERROR,
+					(errcode(ERRCODE_T_R_SERIALIZATION_FAILURE),
+					 errmsg("could not serialize access due to concurrent update")));
+
+		test = table_tuple_lock(erm->relation, &tid,
+								branch_relocated ? SnapshotSelf : estate->es_snapshot,
 								markSlot, estate->es_output_cid,
 								lockmode, erm->waitPolicy,
 								lockflags,
 								&tmfd);
+		if (test == TM_Ok && branch_relocated)
+			tmfd.traversed = true;
 
 		switch (test)
 		{

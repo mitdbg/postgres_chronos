@@ -1,0 +1,8 @@
+[
+
+{ oid => '9101', brsegbranch => '9100', brsegparent => '0',
+  brseglow => '0', brseghigh => '340282366920938463463374607431768211455',
+  brsegpoint => '170141183460469231731687303715884105727',
+  brsegdepth => '0', brsegchildcount => '0', brsegkind => 'm' },
+
+]

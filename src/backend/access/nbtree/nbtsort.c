@@ -47,7 +47,11 @@
 #include "access/tableam.h"
 #include "access/xact.h"
 #include "catalog/index.h"
+#include "catalog/pg_branch.h"
+#include "catalog/pg_branch_segment.h"
+#include "commands/branchcmds.h"
 #include "commands/progress.h"
+#include "executor/executor.h"
 #include "executor/instrument.h"
 #include "miscadmin.h"
 #include "pgstat.h"
@@ -56,10 +60,11 @@
 #include "storage/proc.h"
 #include "tcop/tcopprot.h"
 #include "utils/rel.h"
+#include "utils/datum.h"
 #include "utils/sortsupport.h"
+#include "utils/syscache.h"
 #include "utils/tuplesort.h"
 #include "utils/wait_event.h"
-
 
 /* Magic numbers for parallel state sharing */
 #define PARALLEL_KEY_BTREE_SHARED		UINT64CONST(0xA000000000000001)
@@ -307,7 +312,9 @@ btbuild(Relation heap, Relation index, IndexInfo *indexInfo)
 		ResetUsage();
 #endif							/* BTREE_BUILD_STATS */
 
-	buildstate.isunique = indexInfo->ii_Unique;
+	/* Disjoint branch intervals may legitimately carry duplicate keys. */
+	buildstate.isunique = indexInfo->ii_Unique &&
+		!BranchRelationIsVersioned(heap);
 	buildstate.nulls_not_distinct = indexInfo->ii_NullsNotDistinct;
 	buildstate.havedead = false;
 	buildstate.heap = heap;
@@ -332,6 +339,9 @@ btbuild(Relation heap, Relation index, IndexInfo *indexInfo)
 	 * levels.  Finally, it may also be necessary to end use of parallelism.
 	 */
 	_bt_leafbuild(buildstate.spool, buildstate.spool2);
+	if (indexInfo->ii_Unique && BranchRelationIsVersioned(heap) &&
+		!ReindexIsProcessingIndex(RelationGetRelid(index)))
+		btvalidatebranchuniqueness(heap, index, indexInfo);
 	_bt_spooldestroy(buildstate.spool);
 	if (buildstate.spool2)
 		_bt_spooldestroy(buildstate.spool2);
@@ -352,6 +362,116 @@ btbuild(Relation heap, Relation index, IndexInfo *indexInfo)
 #endif							/* BTREE_BUILD_STATS */
 
 	return result;
+}
+
+/*
+ * The physical btree deliberately permits equal keys belonging to disjoint
+ * branch intervals.  After the build, scan its key order once per active
+ * branch point and enforce the SQL uniqueness invariant on that snapshot.
+ */
+void
+btvalidatebranchuniqueness(Relation heap, Relation index,
+						   IndexInfo *indexInfo)
+{
+	List	   *points;
+	ListCell   *lc;
+	BranchCoordinate savedpoint;
+	int			nkeys = IndexRelationGetNumberOfKeyAttributes(index);
+
+	BranchEnsureSession();
+	savedpoint = MyBranchPoint;
+	points = BranchGetActivePoints();
+
+	BuildSpeculativeIndexInfo(index, indexInfo);
+	PG_TRY();
+	{
+		foreach(lc, points)
+		{
+			BranchCoordinate *point = lfirst(lc);
+			EState	   *estate = CreateExecutorState();
+			ExprContext *econtext = GetPerTupleExprContext(estate);
+			IndexScanDesc scan;
+			TupleTableSlot *slot = table_slot_create(heap, NULL);
+			Datum		previous[INDEX_MAX_KEYS];
+			bool		previous_null[INDEX_MAX_KEYS];
+			bool		have_previous = false;
+
+			MyBranchPoint = *point;
+			scan = index_beginscan(heap, index, SnapshotSelf, NULL, 0, 0, SO_NONE);
+			index_rescan(scan, NULL, 0, NULL, 0);
+			while (index_getnext_slot(scan, ForwardScanDirection, slot))
+			{
+				Datum		values[INDEX_MAX_KEYS];
+				bool		isnull[INDEX_MAX_KEYS];
+				bool		equal = have_previous;
+
+				if (!BranchTupleSlotIsVisible(heap, slot))
+				{
+					ExecClearTuple(slot);
+					continue;
+				}
+				econtext->ecxt_scantuple = slot;
+				FormIndexDatum(indexInfo, slot, estate, values, isnull);
+				for (int i = 0; equal && i < nkeys; i++)
+				{
+					if (isnull[i] || previous_null[i])
+						equal = indexInfo->ii_NullsNotDistinct &&
+							isnull[i] && previous_null[i];
+					else
+						equal = DatumGetBool(OidFunctionCall2Coll(
+							indexInfo->ii_UniqueProcs[i], index->rd_indcollation[i],
+							previous[i], values[i]));
+				}
+				if (equal)
+				{
+					char   *key_desc = BuildIndexValueDescription(index, values, isnull);
+
+					ereport(ERROR,
+							(errcode(ERRCODE_UNIQUE_VIOLATION),
+							 errmsg("could not create unique index \"%s\"",
+									RelationGetRelationName(index)),
+							 key_desc ? errdetail("Key %s is duplicated in a database branch.",
+												 key_desc) : 0,
+							 errtableconstraint(heap, RelationGetRelationName(index))));
+				}
+
+				if (have_previous)
+					for (int i = 0; i < nkeys; i++)
+						if (!previous_null[i] &&
+							!TupleDescAttr(RelationGetDescr(index), i)->attbyval)
+							pfree(DatumGetPointer(previous[i]));
+				for (int i = 0; i < nkeys; i++)
+				{
+					Form_pg_attribute attr = TupleDescAttr(RelationGetDescr(index), i);
+					MemoryContext oldcontext;
+
+					previous_null[i] = isnull[i];
+					oldcontext = MemoryContextSwitchTo(estate->es_query_cxt);
+					previous[i] = isnull[i] ? (Datum) 0 :
+						datumCopy(values[i], attr->attbyval, attr->attlen);
+					MemoryContextSwitchTo(oldcontext);
+				}
+				have_previous = true;
+				ExecClearTuple(slot);
+				ResetExprContext(econtext);
+			}
+
+			if (have_previous)
+				for (int i = 0; i < nkeys; i++)
+					if (!previous_null[i] &&
+						!TupleDescAttr(RelationGetDescr(index), i)->attbyval)
+						pfree(DatumGetPointer(previous[i]));
+			index_endscan(scan);
+			ExecDropSingleTupleTableSlot(slot);
+			FreeExecutorState(estate);
+		}
+	}
+	PG_FINALLY();
+	{
+		MyBranchPoint = savedpoint;
+	}
+	PG_END_TRY();
+	list_free_deep(points);
 }
 
 /*
@@ -381,7 +501,7 @@ _bt_spools_heapscan(Relation heap, Relation index, BTBuildState *buildstate,
 	 */
 	btspool->heap = heap;
 	btspool->index = index;
-	btspool->isunique = indexInfo->ii_Unique;
+	btspool->isunique = buildstate->isunique;
 	btspool->nulls_not_distinct = indexInfo->ii_NullsNotDistinct;
 
 	/* Save as primary spool */
@@ -441,7 +561,7 @@ _bt_spools_heapscan(Relation heap, Relation index, BTBuildState *buildstate,
 	 * them out of the uniqueness check.  We expect that the second spool (for
 	 * dead tuples) won't get very full, so we give it only work_mem.
 	 */
-	if (indexInfo->ii_Unique)
+	if (buildstate->isunique)
 	{
 		BTSpool    *btspool2 = palloc0_object(BTSpool);
 		SortCoordinate coordinate2 = NULL;

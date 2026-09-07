@@ -29,6 +29,7 @@
 #include "access/tupconvert.h"
 #include "access/xact.h"
 #include "catalog/namespace.h"
+#include "commands/branchcmds.h"
 #include "commands/copyapi.h"
 #include "commands/copyfrom_internal.h"
 #include "commands/progress.h"
@@ -1115,6 +1116,8 @@ CopyFrom(CopyFromState cstate)
 	{
 		TupleTableSlot *myslot;
 		bool		skip_tuple;
+		bool		branch_versioned;
+		int64		branch_rowid = 0;
 
 		CHECK_FOR_INTERRUPTS();
 
@@ -1324,6 +1327,11 @@ CopyFrom(CopyFromState cstate)
 		}
 
 		skip_tuple = false;
+		branch_versioned =
+			BranchRelationIsVersioned(resultRelInfo->ri_RelationDesc);
+		if (branch_versioned)
+			branch_rowid = BranchTupleRowId(resultRelInfo->ri_RelationDesc,
+										  myslot);
 
 		/* BEFORE ROW INSERT Triggers */
 		if (has_before_insert_row_trig)
@@ -1334,6 +1342,10 @@ CopyFrom(CopyFromState cstate)
 
 		if (!skip_tuple)
 		{
+			if (branch_versioned)
+				BranchRestoreInsertMetadata(resultRelInfo->ri_RelationDesc,
+										myslot, branch_rowid);
+
 			/*
 			 * If there is an INSTEAD OF INSERT ROW trigger, let it handle the
 			 * tuple.  Otherwise, proceed with inserting the tuple into the
@@ -1584,6 +1596,8 @@ BeginCopyFrom(ParseState *pstate,
 
 	/* Process the target relation */
 	cstate->rel = rel;
+	if (BranchRelationIsVersioned(rel))
+		BranchAcquireLock(RowExclusiveLock);
 
 	tupDesc = RelationGetDescr(cstate->rel);
 

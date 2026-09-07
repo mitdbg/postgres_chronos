@@ -111,6 +111,7 @@
 #include "access/tableam.h"
 #include "access/xact.h"
 #include "catalog/index.h"
+#include "commands/branchcmds.h"
 #include "executor/executor.h"
 #include "nodes/nodeFuncs.h"
 #include "storage/lmgr.h"
@@ -426,7 +427,9 @@ ExecInsertIndexTuples(ResultRelInfo *resultRelInfo,
 		 * For a speculative insertion (used by INSERT ... ON CONFLICT), do
 		 * the same as for a deferrable unique index.
 		 */
-		if (!indexRelation->rd_index->indisunique)
+		if (flags & EIIT_BRANCH_HISTORY)
+			checkUnique = UNIQUE_CHECK_NO;
+		else if (!indexRelation->rd_index->indisunique)
 			checkUnique = UNIQUE_CHECK_NO;
 		else if (applyNoDupErr)
 			checkUnique = UNIQUE_CHECK_PARTIAL;
@@ -470,7 +473,8 @@ ExecInsertIndexTuples(ResultRelInfo *resultRelInfo,
 		 * essential property, we just don't allow it in the grammar), so no
 		 * need to preserve the prior state of satisfiesConstraint.
 		 */
-		if (indexInfo->ii_ExclusionOps != NULL)
+		if (indexInfo->ii_ExclusionOps != NULL &&
+			!(flags & EIIT_BRANCH_HISTORY))
 		{
 			bool		violationOK;
 			CEOUC_WAIT_MODE waitMode;
@@ -849,6 +853,10 @@ retry:
 			found_self = true;
 			continue;
 		}
+
+		/* Physical versions outside this branch cannot violate its constraint. */
+		if (!BranchTupleSlotIsVisible(heap, existing_slot))
+			continue;
 
 		/*
 		 * Extract the index column values and isnull flags from the existing

@@ -908,6 +908,29 @@
   amoprighttype => 'pg_lsn', amopstrategy => '5', amopopr => '>(pg_lsn,pg_lsn)',
   amopmethod => 'btree' },
 
+# btree pg_branch_coord_ops
+
+{ amopfamily => 'btree/pg_branch_coord_ops',
+  amoplefttype => 'pg_branch_coord', amoprighttype => 'pg_branch_coord',
+  amopstrategy => '1', amopopr => '<(pg_branch_coord,pg_branch_coord)',
+  amopmethod => 'btree' },
+{ amopfamily => 'btree/pg_branch_coord_ops',
+  amoplefttype => 'pg_branch_coord', amoprighttype => 'pg_branch_coord',
+  amopstrategy => '2', amopopr => '<=(pg_branch_coord,pg_branch_coord)',
+  amopmethod => 'btree' },
+{ amopfamily => 'btree/pg_branch_coord_ops',
+  amoplefttype => 'pg_branch_coord', amoprighttype => 'pg_branch_coord',
+  amopstrategy => '3', amopopr => '=(pg_branch_coord,pg_branch_coord)',
+  amopmethod => 'btree' },
+{ amopfamily => 'btree/pg_branch_coord_ops',
+  amoplefttype => 'pg_branch_coord', amoprighttype => 'pg_branch_coord',
+  amopstrategy => '4', amopopr => '>=(pg_branch_coord,pg_branch_coord)',
+  amopmethod => 'btree' },
+{ amopfamily => 'btree/pg_branch_coord_ops',
+  amoplefttype => 'pg_branch_coord', amoprighttype => 'pg_branch_coord',
+  amopstrategy => '5', amopopr => '>(pg_branch_coord,pg_branch_coord)',
+  amopmethod => 'btree' },
+
 # hash index_ops
 
 # bpchar_ops

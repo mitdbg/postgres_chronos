@@ -314,14 +314,14 @@ static Node *makeRecursiveViewSelect(char *relname, List *aliases, Node *query);
 		DropOwnedStmt ReassignOwnedStmt
 		AlterTSConfigurationStmt AlterTSDictionaryStmt
 		CreateMatViewStmt RefreshMatViewStmt CreateAmStmt
-		CreatePublicationStmt AlterPublicationStmt
+		CreatePublicationStmt AlterPublicationStmt CreateBranchStmt DropBranchStmt
 		CreateSubscriptionStmt AlterSubscriptionStmt DropSubscriptionStmt
 
 %type <node>	select_no_parens select_with_parens select_clause
 				simple_select values_clause
 				PLpgSQL_Expr PLAssignStmt
 
-%type <str>			opt_single_name
+%type <str>			opt_single_name opt_branch_from
 %type <list>		opt_qualified_name
 %type <boolean>		opt_concurrently opt_usingindex
 %type <dbehavior>	opt_drop_behavior
@@ -744,7 +744,7 @@ static Node *makeRecursiveViewSelect(char *relname, List *aliases, Node *query);
 	ASENSITIVE ASSERTION ASSIGNMENT ASYMMETRIC ATOMIC AT ATTACH ATTRIBUTE AUTHORIZATION
 
 	BACKWARD BEFORE BEGIN_P BETWEEN BIGINT BINARY BIT
-	BOOLEAN_P BOTH BREADTH BY
+	BOOLEAN_P BOTH BRANCH BREADTH BY
 
 	CACHE CALL CALLED CASCADE CASCADED CASE CAST CATALOG_P CHAIN CHAR_P
 	CHARACTER CHARACTERISTICS CHECK CHECKPOINT CLASS CLOSE
@@ -1076,6 +1076,7 @@ stmt:
 			| CopyStmt
 			| CreateAmStmt
 			| CreateAsStmt
+			| CreateBranchStmt
 			| CreateAssertionStmt
 			| CreateCastStmt
 			| CreateConversionStmt
@@ -1114,6 +1115,7 @@ stmt:
 			| DiscardStmt
 			| DoStmt
 			| DropCastStmt
+			| DropBranchStmt
 			| DropOpClassStmt
 			| DropOpFamilyStmt
 			| DropOwnedStmt
@@ -1397,6 +1399,60 @@ CreateOptRoleElem:
 			| IN_P GROUP_P role_list
 				{
 					$$ = makeDefElem("addroleto", (Node *) $3, @1);
+				}
+		;
+
+
+/*****************************************************************************
+ *
+ * Native database branches
+ *
+ *****************************************************************************/
+
+CreateBranchStmt:
+			CREATE BRANCH name opt_branch_from
+				{
+					CreateBranchStmt *n = makeNode(CreateBranchStmt);
+
+					n->branchname = $3;
+					n->frombranch = $4;
+					n->if_not_exists = false;
+					$$ = (Node *) n;
+				}
+			| CREATE BRANCH IF_P NOT EXISTS name opt_branch_from
+				{
+					CreateBranchStmt *n = makeNode(CreateBranchStmt);
+
+					n->branchname = $6;
+					n->frombranch = $7;
+					n->if_not_exists = true;
+					$$ = (Node *) n;
+				}
+		;
+
+opt_branch_from:
+			FROM name							{ $$ = $2; }
+			| /* EMPTY */						{ $$ = NULL; }
+		;
+
+DropBranchStmt:
+			DROP BRANCH name opt_drop_behavior
+				{
+					DropBranchStmt *n = makeNode(DropBranchStmt);
+
+					n->branchname = $3;
+					n->missing_ok = false;
+					n->behavior = $4;
+					$$ = (Node *) n;
+				}
+			| DROP BRANCH IF_P EXISTS name opt_drop_behavior
+				{
+					DropBranchStmt *n = makeNode(DropBranchStmt);
+
+					n->branchname = $5;
+					n->missing_ok = true;
+					n->behavior = $6;
+					$$ = (Node *) n;
 				}
 		;
 
@@ -1807,6 +1863,16 @@ generic_set:
 
 set_rest_more:	/* Generic SET syntaxes: */
 			generic_set							{$$ = $1;}
+			| BRANCH name
+				{
+					VariableSetStmt *n = makeNode(VariableSetStmt);
+
+					n->kind = VAR_SET_VALUE;
+					n->name = "branch";
+					n->args = list_make1(makeStringConst($2, @2));
+					n->location = @2;
+					$$ = n;
+				}
 			| var_name FROM CURRENT_P
 				{
 					VariableSetStmt *n = makeNode(VariableSetStmt);
@@ -18786,6 +18852,7 @@ unreserved_keyword:
 			| BACKWARD
 			| BEFORE
 			| BEGIN_P
+			| BRANCH
 			| BREADTH
 			| BY
 			| CACHE

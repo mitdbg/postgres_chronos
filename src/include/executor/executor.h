@@ -756,6 +756,7 @@ extern void ExecCloseIndices(ResultRelInfo *resultRelInfo);
 #define		EIIT_IS_UPDATE			(1<<0)
 #define		EIIT_NO_DUPE_ERROR		(1<<1)
 #define		EIIT_ONLY_SUMMARIZING	(1<<2)
+#define		EIIT_BRANCH_HISTORY		(1<<3)
 extern List *ExecInsertIndexTuples(ResultRelInfo *resultRelInfo, EState *estate,
 								   uint32 flags, TupleTableSlot *slot,
 								   List *arbiterIndexes,

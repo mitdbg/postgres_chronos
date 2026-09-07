@@ -13,6 +13,7 @@
 #include "postgres.h"
 
 #include "access/parallel.h"
+#include "commands/branchcmds.h"
 #include "commands/repack.h"
 #include "libpq/pqsignal.h"
 #include "miscadmin.h"
@@ -138,6 +139,14 @@ static const struct
 	{
 		.fn_name = "ApplyWorkerMain",
 		.fn_addr = ApplyWorkerMain
+	},
+	{
+		.fn_name = "BranchIndexWorkerMain",
+		.fn_addr = BranchIndexWorkerMain
+	},
+	{
+		.fn_name = "BranchGcWorkerMain",
+		.fn_addr = BranchGcWorkerMain
 	},
 	{
 		.fn_name = "ParallelApplyWorkerMain",

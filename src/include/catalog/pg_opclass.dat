@@ -214,6 +214,8 @@
   opcfamily => 'btree/pg_lsn_ops', opcintype => 'pg_lsn' },
 { opcmethod => 'hash', opcname => 'pg_lsn_ops', opcfamily => 'hash/pg_lsn_ops',
   opcintype => 'pg_lsn' },
+{ oid => '9031', opcmethod => 'btree', opcname => 'pg_branch_coord_ops',
+  opcfamily => 'btree/pg_branch_coord_ops', opcintype => 'pg_branch_coord' },
 { opcmethod => 'btree', opcname => 'enum_ops', opcfamily => 'btree/enum_ops',
   opcintype => 'anyenum' },
 { opcmethod => 'hash', opcname => 'enum_ops', opcfamily => 'hash/enum_ops',

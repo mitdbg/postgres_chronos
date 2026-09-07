@@ -30,6 +30,7 @@
 #include "catalog/pg_publication_namespace.h"
 #include "catalog/pg_publication_rel.h"
 #include "commands/defrem.h"
+#include "commands/branchcmds.h"
 #include "commands/event_trigger.h"
 #include "commands/publicationcmds.h"
 #include "miscadmin.h"
@@ -857,6 +858,18 @@ CreatePublication(ParseState *pstate, CreatePublicationStmt *stmt)
 	if (aclresult != ACLCHECK_OK)
 		aclcheck_error(aclresult, OBJECT_DATABASE,
 					   get_database_name(MyDatabaseId));
+
+	/*
+	 * Until logical decoding has a branch-aware output protocol, reject the
+	 * operation instead of publishing physical COW fragments and tombstones.
+	 * The shared activation lock also serializes this check with the first
+	 * CREATE BRANCH transaction.
+	 */
+	BranchAcquireActivationLock(AccessShareLock);
+	if (BranchDatabaseIsEnabled())
+		ereport(ERROR,
+				(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
+				 errmsg("cannot create a publication in a database with native branching enabled")));
 
 	/* FOR ALL TABLES and FOR ALL SEQUENCES requires superuser */
 	if (!superuser())

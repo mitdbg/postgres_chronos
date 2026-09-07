@@ -586,6 +586,7 @@ CREATE TABLE tab_core_types AS SELECT
   'pg_monitor'::regrole,
   'pg_class'::regclass::oid,
   'template1'::regdatabase,
+  '1'::pg_branch_coord,
   '(1,1)'::tid, '2'::xid, '3'::cid,
   '10:20:10,14,15'::txid_snapshot,
   '10:20:10,14,15'::pg_snapshot,
@@ -632,3 +633,5 @@ SELECT oid, typname, typtype, typelem, typarray
                     WHERE a.atttypid=t.oid AND
                           a.attnum > 0 AND
                           a.attrelid='tab_core_types'::regclass);
+
+-- end of type sanity checks

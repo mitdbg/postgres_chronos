@@ -58,6 +58,7 @@
 #include "catalog/storage_xlog.h"
 #include "catalog/toasting.h"
 #include "commands/comment.h"
+#include "commands/branchcmds.h"
 #include "commands/defrem.h"
 #include "commands/event_trigger.h"
 #include "commands/repack.h"
@@ -1475,6 +1476,7 @@ BuildDescForRelation(const List *columns)
 		/* Fill in additional stuff not handled by TupleDescInitEntry */
 		att->attnotnull = entry->is_not_null;
 		att->attislocal = entry->is_local;
+		att->attishidden = entry->is_hidden;
 		att->attinhcount = entry->inhcount;
 		att->attidentity = entry->identity;
 		att->attgenerated = entry->generated;
@@ -1938,7 +1940,8 @@ ExecuteTruncate(TruncateStmt *stmt)
 		relids = lappend_oid(relids, myrelid);
 
 		/* Log this relation only if needed for logical decoding */
-		if (RelationIsLogicallyLogged(rel))
+		if (RelationIsLogicallyLogged(rel) &&
+			!BranchRelationIsVersioned(rel))
 			relids_logged = lappend_oid(relids_logged, myrelid);
 
 		if (recurse)
@@ -1986,7 +1989,8 @@ ExecuteTruncate(TruncateStmt *stmt)
 				relids = lappend_oid(relids, childrelid);
 
 				/* Log this relation only if needed for logical decoding */
-				if (RelationIsLogicallyLogged(rel))
+				if (RelationIsLogicallyLogged(rel) &&
+					!BranchRelationIsVersioned(rel))
 					relids_logged = lappend_oid(relids_logged, childrelid);
 			}
 		}
@@ -2189,6 +2193,13 @@ ExecuteTruncateGuts(List *explicit_rels,
 		/* Skip partitioned tables as there is nothing to do */
 		if (rel->rd_rel->relkind == RELKIND_PARTITIONED_TABLE)
 			continue;
+
+		if (BranchRelationIsVersioned(rel))
+		{
+			BranchTruncateRelation(rel);
+			pgstat_count_truncate(rel);
+			continue;
+		}
 
 		/*
 		 * Build the lists of foreign tables belonging to each foreign server
@@ -2586,6 +2597,22 @@ storage_name(char c)
  *		the same generation expression.
  *----------
  */
+static int
+count_user_columns(const List *columns)
+{
+	int			count = 0;
+	ListCell   *lc;
+
+	foreach(lc, columns)
+	{
+		ColumnDef  *column = lfirst_node(ColumnDef, lc);
+
+		if (!column->is_hidden)
+			count++;
+	}
+	return count;
+}
+
 static List *
 MergeAttributes(List *columns, const List *supers, char relpersistence,
 				bool is_partition, List **supconstr, List **supnotnulls)
@@ -2610,11 +2637,12 @@ MergeAttributes(List *columns, const List *supers, char relpersistence,
 	 * Note that we also need to check that we do not exceed this figure after
 	 * including columns from inherited relations.
 	 */
-	if (list_length(columns) > MaxHeapAttributeNumber)
+	if (list_length(columns) > MaxHeapAttributeNumber ||
+		count_user_columns(columns) > MaxUserHeapAttributeNumber)
 		ereport(ERROR,
 				(errcode(ERRCODE_TOO_MANY_COLUMNS),
 				 errmsg("tables can have at most %d columns",
-						MaxHeapAttributeNumber)));
+						MaxUserHeapAttributeNumber)));
 
 	/*
 	 * Check for duplicate names in the explicit list of attributes.
@@ -2823,6 +2851,7 @@ MergeAttributes(List *columns, const List *supers, char relpersistence,
 			 */
 			newdef = makeColumnDef(attributeName, attribute->atttypid,
 								   attribute->atttypmod, attribute->attcollation);
+			newdef->is_hidden = attribute->attishidden;
 			newdef->storage = attribute->attstorage;
 			newdef->generated = attribute->attgenerated;
 			if (CompressionMethodIsValid(attribute->attcompression))
@@ -3061,11 +3090,12 @@ MergeAttributes(List *columns, const List *supers, char relpersistence,
 		 * Check that we haven't exceeded the legal # of columns after merging
 		 * in inherited columns.
 		 */
-		if (list_length(columns) > MaxHeapAttributeNumber)
+		if (list_length(columns) > MaxHeapAttributeNumber ||
+			count_user_columns(columns) > MaxUserHeapAttributeNumber)
 			ereport(ERROR,
 					(errcode(ERRCODE_TOO_MANY_COLUMNS),
 					 errmsg("tables can have at most %d columns",
-							MaxHeapAttributeNumber)));
+							MaxUserHeapAttributeNumber)));
 	}
 
 	/*
@@ -3469,9 +3499,10 @@ MergeInheritedAttribute(List *inh_columns,
 	Oid			prevcollid,
 				newcollid;
 
-	ereport(NOTICE,
-			(errmsg("merging multiple inherited definitions of column \"%s\"",
-					attributeName)));
+	if (!newdef->is_hidden)
+		ereport(NOTICE,
+				(errmsg("merging multiple inherited definitions of column \"%s\"",
+						attributeName)));
 	prevdef = list_nth_node(ColumnDef, inh_columns, exist_attno - 1);
 
 	/*
@@ -3985,6 +4016,10 @@ renameatt_internal(Oid myrelid,
 	attform = (Form_pg_attribute) GETSTRUCT(atttup);
 
 	attnum = attform->attnum;
+	if (attform->attishidden)
+		ereport(ERROR,
+				(errcode(ERRCODE_UNDEFINED_COLUMN),
+				 errmsg("column \"%s\" does not exist", oldattname)));
 	if (attnum <= 0)
 		ereport(ERROR,
 				(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
@@ -4005,6 +4040,12 @@ renameatt_internal(Oid myrelid,
 				(errcode(ERRCODE_INVALID_TABLE_DEFINITION),
 				 errmsg("cannot rename inherited column \"%s\"",
 						oldattname)));
+
+	if (strncmp(newattname, "__pg_branch_", 12) == 0)
+		ereport(ERROR,
+				(errcode(ERRCODE_RESERVED_NAME),
+				 errmsg("column name \"%s\" is reserved for native branching",
+						newattname)));
 
 	/* new name should not already exist */
 	(void) check_for_column_name_collision(targetrelation, newattname, false);
@@ -4967,6 +5008,26 @@ ATPrepCmd(List **wqueue, Relation rel, AlterTableCmd *cmd,
 				errmsg("cannot alter partition \"%s\" with an incomplete detach",
 					   RelationGetRelationName(rel)),
 				errhint("Use ALTER TABLE ... DETACH PARTITION ... FINALIZE to complete the pending detach operation."));
+
+	/* Hidden branch fields are engine state, not ALTER TABLE targets. */
+	if (cmd->subtype != AT_AddColumn && cmd->name != NULL)
+	{
+		HeapTuple	atttuple;
+
+		atttuple = SearchSysCacheAttName(RelationGetRelid(rel), cmd->name);
+		if (HeapTupleIsValid(atttuple))
+		{
+			bool		is_hidden =
+				((Form_pg_attribute) GETSTRUCT(atttuple))->attishidden;
+
+			ReleaseSysCache(atttuple);
+			if (is_hidden)
+				ereport(ERROR,
+						(errcode(ERRCODE_UNDEFINED_COLUMN),
+						 errmsg("column \"%s\" of relation \"%s\" does not exist",
+								cmd->name, RelationGetRelationName(rel))));
+		}
+	}
 
 	/*
 	 * Copy the original subcommand for each table, so we can scribble on it.
@@ -7241,6 +7302,15 @@ ATPrepAddColumn(List **wqueue, Relation rel, bool recurse, bool recursing,
 				bool is_view, AlterTableCmd *cmd, LOCKMODE lockmode,
 				AlterTableUtilityContext *context)
 {
+	ColumnDef  *column = castNode(ColumnDef, cmd->def);
+
+	if (!column->is_hidden &&
+		strncmp(column->colname, "__pg_branch_", 12) == 0)
+		ereport(ERROR,
+				(errcode(ERRCODE_RESERVED_NAME),
+				 errmsg("column name \"%s\" is reserved for native branching",
+						column->colname)));
+
 	if (rel->rd_rel->reloftype && !recursing)
 		ereport(ERROR,
 				(errcode(ERRCODE_WRONG_OBJECT_TYPE),
@@ -7412,11 +7482,27 @@ ATExecAddColumn(List **wqueue, AlteredTableInfo *tab, Relation rel,
 
 	/* Determine the new attribute's number */
 	newattnum = relform->relnatts + 1;
+	if (!colDef->is_hidden)
+	{
+		int			hidden_columns = 0;
+		TupleDesc	reldesc = RelationGetDescr(rel);
+
+		for (int i = 0; i < reldesc->natts; i++)
+		{
+			if (TupleDescAttr(reldesc, i)->attishidden)
+				hidden_columns++;
+		}
+		if (newattnum - hidden_columns > MaxUserHeapAttributeNumber)
+			ereport(ERROR,
+					(errcode(ERRCODE_TOO_MANY_COLUMNS),
+					 errmsg("tables can have at most %d columns",
+							MaxUserHeapAttributeNumber)));
+	}
 	if (newattnum > MaxHeapAttributeNumber)
 		ereport(ERROR,
 				(errcode(ERRCODE_TOO_MANY_COLUMNS),
 				 errmsg("tables can have at most %d columns",
-						MaxHeapAttributeNumber)));
+						MaxUserHeapAttributeNumber)));
 
 	/*
 	 * Construct new attribute's pg_attribute entry.

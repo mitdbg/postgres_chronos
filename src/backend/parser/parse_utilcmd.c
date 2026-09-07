@@ -30,6 +30,7 @@
 #include "access/table.h"
 #include "access/toast_compression.h"
 #include "catalog/dependency.h"
+#include "catalog/catalog.h"
 #include "catalog/heap.h"
 #include "catalog/index.h"
 #include "catalog/namespace.h"
@@ -41,6 +42,7 @@
 #include "catalog/pg_statistic_ext.h"
 #include "catalog/pg_type.h"
 #include "commands/comment.h"
+#include "commands/branchcmds.h"
 #include "commands/defrem.h"
 #include "commands/sequence.h"
 #include "commands/tablecmds.h"
@@ -99,6 +101,12 @@ typedef struct
 
 static void transformColumnDefinition(CreateStmtContext *cxt,
 									  ColumnDef *column);
+static ColumnDef *makeBranchColumn(const char *name, Oid typeoid,
+								   const char *default_function);
+static bool addBranchColumns(CreateStmtContext *cxt, CreateStmt *stmt,
+							 Oid namespaceid);
+static IndexStmt *makeBranchIndex(CreateStmt *stmt, const char *first,
+								  const char *second);
 static void transformTableConstraint(CreateStmtContext *cxt,
 									 Constraint *constraint);
 static void transformTableLikeClause(CreateStmtContext *cxt,
@@ -166,6 +174,7 @@ transformCreateStmt(CreateStmt *stmt, const char *queryString)
 	Oid			namespaceid;
 	Oid			existing_relid;
 	ParseCallbackState pcbstate;
+	bool		branch_versioned;
 
 	/* Set up pstate */
 	pstate = make_parsestate(NULL);
@@ -252,6 +261,8 @@ transformCreateStmt(CreateStmt *stmt, const char *queryString)
 	if (stmt->ofTypename)
 		transformOfType(&cxt, stmt->ofTypename);
 
+	branch_versioned = addBranchColumns(&cxt, stmt, namespaceid);
+
 	if (stmt->partspec)
 	{
 		if (stmt->inhRelations && !stmt->partbound)
@@ -330,6 +341,16 @@ transformCreateStmt(CreateStmt *stmt, const char *queryString)
 	 * Postprocess constraints that give rise to index definitions.
 	 */
 	transformIndexConstraints(&cxt);
+	/* Schema-copy heaps are populated before their indexes are built. */
+	if (branch_versioned && !BranchSchemaCopyInProgress())
+	{
+		cxt.alist = lappend(cxt.alist,
+			makeBranchIndex(stmt, BRANCH_ROWID_ATTRIBUTE_NAME,
+							BRANCH_LOW_ATTRIBUTE_NAME));
+		cxt.alist = lappend(cxt.alist,
+			makeBranchIndex(stmt, BRANCH_WRITER_ATTRIBUTE_NAME,
+							BRANCH_ROWID_ATTRIBUTE_NAME));
+	}
 
 	/*
 	 * Re-consideration of LIKE clauses should happen after creation of
@@ -372,6 +393,129 @@ transformCreateStmt(CreateStmt *stmt, const char *queryString)
 	return result;
 }
 
+/*
+ * Build one engine-owned attribute.  Defaults are ordinary PostgreSQL
+ * defaults, which deliberately makes INSERT, COPY and partition routing use
+ * the same path as user columns.
+ */
+static ColumnDef *
+makeBranchColumn(const char *name, Oid typeoid, const char *default_function)
+{
+	ColumnDef  *column = makeNode(ColumnDef);
+	Constraint *constraint;
+
+	column->colname = pstrdup(name);
+	column->typeName = makeTypeNameFromOid(typeoid, -1);
+	column->is_local = true;
+	column->is_not_null = true;
+	column->is_hidden = true;
+	column->collOid = InvalidOid;
+	column->location = -1;
+
+	constraint = makeNode(Constraint);
+	constraint->contype = CONSTR_DEFAULT;
+	constraint->location = -1;
+	if (default_function != NULL)
+		constraint->raw_expr = (Node *) makeFuncCall(SystemFuncName(pstrdup(default_function)),
+													NIL, COERCE_EXPLICIT_CALL, -1);
+	else
+	{
+		A_Const    *value = makeNode(A_Const);
+
+		value->val.boolval.type = T_Boolean;
+		value->val.boolval.boolval = false;
+		value->location = -1;
+		constraint->raw_expr = (Node *) value;
+	}
+	column->constraints = list_make1(constraint);
+
+	return column;
+}
+
+static bool
+addBranchColumns(CreateStmtContext *cxt, CreateStmt *stmt, Oid namespaceid)
+{
+	ListCell   *lc;
+	char	   *namespace_name = get_namespace_name(namespaceid);
+
+	foreach(lc, stmt->tableElts)
+	{
+		Node	   *element = lfirst(lc);
+
+		if (IsA(element, ColumnDef) &&
+			strncmp(castNode(ColumnDef, element)->colname,
+					"__pg_branch_", 12) == 0)
+			ereport(ERROR,
+					(errcode(ERRCODE_RESERVED_NAME),
+					 errmsg("column name \"%s\" is reserved for native branching",
+							castNode(ColumnDef, element)->colname)));
+	}
+
+	if (cxt->isforeign ||
+		stmt->relation->relpersistence == RELPERSISTENCE_TEMP ||
+		IsCatalogNamespace(namespaceid) || IsToastNamespace(namespaceid) ||
+		(namespace_name != NULL &&
+		 strcmp(namespace_name, "information_schema") == 0))
+		return false;
+
+	BranchAcquireActivationLock(AccessShareLock);
+	if (!BranchDatabaseIsEnabled())
+		return false;
+
+	/*
+	 * Inheritance supplies the parent's hidden attributes.  A declarative
+	 * partition also receives physical indexes from the parent's partitioned
+	 * indexes, so emitting another pair here would create duplicate metadata
+	 * indexes on every leaf.  Traditional inheritance does not propagate
+	 * indexes and therefore still needs its own pair.
+	 */
+	if (stmt->inhRelations != NIL)
+		return stmt->partbound == NULL;
+
+	/*
+	 * Row identity comes from one engine-owned database allocator.  It is not
+	 * table identity state: inheritance and partition attachment must not
+	 * create, clone, or reject it, and user RESTART IDENTITY must not reset it.
+	 */
+	stmt->tableElts = lappend(stmt->tableElts,
+		makeBranchColumn(BRANCH_ROWID_ATTRIBUTE_NAME, INT8OID,
+						 "pg_branch_rowid"));
+	stmt->tableElts = lappend(stmt->tableElts,
+		makeBranchColumn(BRANCH_LOW_ATTRIBUTE_NAME, PG_BRANCH_COORDOID,
+						 "pg_branch_interval_low"));
+	stmt->tableElts = lappend(stmt->tableElts,
+		makeBranchColumn(BRANCH_HIGH_ATTRIBUTE_NAME, PG_BRANCH_COORDOID,
+						 "pg_branch_interval_high"));
+	stmt->tableElts = lappend(stmt->tableElts,
+		makeBranchColumn(BRANCH_WRITER_ATTRIBUTE_NAME, OIDOID,
+						 "pg_branch_writer"));
+	stmt->tableElts = lappend(stmt->tableElts,
+		makeBranchColumn(BRANCH_DELETED_ATTRIBUTE_NAME, BOOLOID, NULL));
+	return true;
+}
+
+static IndexStmt *
+makeBranchIndex(CreateStmt *stmt, const char *first, const char *second)
+{
+	IndexStmt  *index = makeNode(IndexStmt);
+	IndexElem  *firstelem = makeNode(IndexElem);
+	IndexElem  *secondelem = makeNode(IndexElem);
+
+	firstelem->name = pstrdup(first);
+	firstelem->ordering = SORTBY_DEFAULT;
+	firstelem->nulls_ordering = SORTBY_NULLS_DEFAULT;
+	secondelem->name = pstrdup(second);
+	secondelem->ordering = SORTBY_DEFAULT;
+	secondelem->nulls_ordering = SORTBY_NULLS_DEFAULT;
+
+	index->relation = copyObject(stmt->relation);
+	index->accessMethod = pstrdup(DEFAULT_INDEX_TYPE);
+	index->indexParams = list_make2(firstelem, secondelem);
+	index->transformed = false;
+	index->concurrent = false;
+	index->if_not_exists = false;
+	return index;
+}
 /*
  * generateSerialExtraStmts
  *		Generate CREATE SEQUENCE and ALTER SEQUENCE ... OWNED BY statements
@@ -1184,7 +1328,7 @@ transformTableLikeClause(CreateStmtContext *cxt, TableLikeClause *table_like_cla
 		/*
 		 * Ignore dropped columns in the parent.
 		 */
-		if (attribute->attisdropped)
+		if (attribute->attisdropped || attribute->attishidden)
 			continue;
 
 		/*
@@ -1661,7 +1805,7 @@ transformOfType(CreateStmtContext *cxt, TypeName *ofTypename)
 		Form_pg_attribute attr = TupleDescAttr(tupdesc, i);
 		ColumnDef  *n;
 
-		if (attr->attisdropped)
+		if (attr->attisdropped || attr->attishidden)
 			continue;
 
 		n = makeColumnDef(NameStr(attr->attname), attr->atttypid,

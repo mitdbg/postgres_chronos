@@ -42,6 +42,7 @@
 #include "catalog/namespace.h"
 #include "catalog/storage.h"
 #include "commands/async.h"
+#include "commands/branchcmds.h"
 #include "commands/extension.h"
 #include "commands/event_trigger.h"
 #include "commands/tablespace.h"

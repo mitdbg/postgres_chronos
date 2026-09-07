@@ -36,6 +36,7 @@
 #include "catalog/pg_collation.h"
 #include "catalog/pg_constraint.h"
 #include "catalog/pg_namespace.h"
+#include "commands/branchcmds.h"
 #include "commands/trigger.h"
 #include "executor/executor.h"
 #include "executor/spi.h"
@@ -3454,6 +3455,15 @@ ri_LockPKTuple(Relation pk_rel, TupleTableSlot *slot, Snapshot snap,
 static bool
 ri_fastpath_is_applicable(const RI_ConstraintInfo *riinfo)
 {
+	/*
+	 * The direct index probe bypasses query rewrite, so it would accept a PK
+	 * version outside the current branch.  Use the SPI path in an activated
+	 * database until the fast path carries branch visibility as part of its
+	 * table tuple probe.
+	 */
+	if (BranchDatabaseIsEnabled())
+		return false;
+
 	/*
 	 * Partitioned referenced tables are skipped for simplicity, since they
 	 * require routing the probe through the correct partition using

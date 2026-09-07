@@ -33,6 +33,7 @@ sub ParseHeader
 		'int64' => 'int8',
 		'Oid' => 'oid',
 		'NameData' => 'name',
+		'BranchCoordinate' => 'pg_branch_coord',
 		'TransactionId' => 'xid',
 		'XLogRecPtr' => 'pg_lsn');
 

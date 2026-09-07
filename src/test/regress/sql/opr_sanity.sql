@@ -1426,3 +1426,5 @@ FROM (SELECT indexrelid, indrelid,
       WHERE indrelid < 16384) ss
 WHERE icoll != 0 AND
     icoll != (SELECT oid FROM pg_collation WHERE collname = 'C');
+
+-- end of operator sanity checks

@@ -57,6 +57,8 @@
 #include "access/tableam.h"
 #include "access/tupconvert.h"
 #include "access/xact.h"
+#include "catalog/pg_branch_segment.h"
+#include "commands/branchcmds.h"
 #include "commands/trigger.h"
 #include "executor/execPartition.h"
 #include "executor/executor.h"
@@ -121,6 +123,200 @@ typedef struct ModifyTableContext
 	 */
 	TupleTableSlot *cpUpdateReturningSlot;
 } ModifyTableContext;
+
+typedef struct BranchModifyState
+{
+	bool		versioned;
+	bool		left_fragment;
+	bool		right_fragment;
+	BranchCoordinate old_low;
+	BranchCoordinate old_high;
+} BranchModifyState;
+
+static void BranchSetSlotMetadata(Relation relation, TupleTableSlot *slot,
+								  const BranchCoordinate *low,
+								  const BranchCoordinate *high,
+								  Oid writer, bool deleted);
+static void BranchPrepareUpdate(Relation relation, TupleTableSlot *oldslot,
+								TupleTableSlot *newslot,
+								BranchModifyState *state);
+static void BranchCaptureOld(Relation relation, TupleTableSlot *oldslot,
+							 BranchModifyState *state);
+static void BranchInsertVersions(ResultRelInfo *resultRelInfo, EState *estate,
+								 TupleTableSlot *oldslot,
+								 BranchModifyState *state,
+								 bool insert_current_tombstone);
+
+/* Replace metadata in a materialized slot and rebuild its physical tuple. */
+static void
+BranchSetSlotMetadata(Relation relation, TupleTableSlot *slot,
+					  const BranchCoordinate *low,
+					  const BranchCoordinate *high,
+					  Oid writer, bool deleted)
+{
+	AttrNumber	attnums[BRANCH_HIDDEN_ATTRIBUTE_COUNT];
+	TupleDesc	desc = RelationGetDescr(relation);
+	HeapTuple	tuple;
+	BranchCoordinate *lowcopy;
+	BranchCoordinate *highcopy;
+
+	if (!BranchGetAttributeNumbers(relation, attnums))
+		return;
+
+	ExecMaterializeSlot(slot);
+	slot_getallattrs(slot);
+	lowcopy = palloc_object(BranchCoordinate);
+	highcopy = palloc_object(BranchCoordinate);
+	*lowcopy = *low;
+	*highcopy = *high;
+	slot->tts_values[attnums[1] - 1] = BranchCoordinatePGetDatum(lowcopy);
+	slot->tts_values[attnums[2] - 1] = BranchCoordinatePGetDatum(highcopy);
+	slot->tts_values[attnums[3] - 1] = ObjectIdGetDatum(writer);
+	slot->tts_values[attnums[4] - 1] = BoolGetDatum(deleted);
+	for (int i = 1; i < BRANCH_HIDDEN_ATTRIBUTE_COUNT; i++)
+		slot->tts_isnull[attnums[i] - 1] = false;
+
+	tuple = heap_form_tuple(desc, slot->tts_values, slot->tts_isnull);
+	ExecForceStoreHeapTuple(tuple, slot, true);
+	slot->tts_tableOid = RelationGetRelid(relation);
+}
+
+/* Capture and validate the interval of a tuple selected in this branch. */
+static void
+BranchCaptureOld(Relation relation, TupleTableSlot *oldslot,
+				 BranchModifyState *state)
+{
+	AttrNumber	attnums[BRANCH_HIDDEN_ATTRIBUTE_COUNT];
+	Datum		value;
+	Datum		rowiddatum;
+	bool		isnull;
+	BranchCoordinate *coord;
+	int64		rowid;
+
+	MemSet(state, 0, sizeof(*state));
+	if (!BranchGetAttributeNumbers(relation, attnums))
+		return;
+
+	BranchAcquireLock(RowExclusiveLock);
+	if (BranchRelationCanModifyInPlace(relation))
+		return;
+	ExecMaterializeSlot(oldslot);
+	rowiddatum = slot_getattr(oldslot, attnums[0], &isnull);
+	if (isnull)
+		elog(ERROR, "null branch row identifier in relation \"%s\"",
+			 RelationGetRelationName(relation));
+	rowid = DatumGetInt64(rowiddatum);
+	/* Reentrant if trigger tuple resolution already acquired this lock. */
+	BranchLockRowIdentity(relation, rowid);
+	value = slot_getattr(oldslot, attnums[1], &isnull);
+	if (isnull)
+		elog(ERROR, "null lower branch bound in relation \"%s\"",
+			 RelationGetRelationName(relation));
+	coord = DatumGetBranchCoordinateP(value);
+	state->old_low = *coord;
+	value = slot_getattr(oldslot, attnums[2], &isnull);
+	if (isnull)
+		elog(ERROR, "null upper branch bound in relation \"%s\"",
+			 RelationGetRelationName(relation));
+	coord = DatumGetBranchCoordinateP(value);
+	state->old_high = *coord;
+
+	if (branchcoord_cmp_internal(&state->old_low, &MyBranchLow) > 0 ||
+		branchcoord_cmp_internal(&MyBranchHigh, &state->old_high) > 0)
+		elog(ERROR, "branch interval invariant violated in relation \"%s\"",
+			 RelationGetRelationName(relation));
+
+	state->versioned = true;
+	state->left_fragment =
+		branchcoord_cmp_internal(&state->old_low, &MyBranchLow) < 0;
+	state->right_fragment =
+		branchcoord_cmp_internal(&MyBranchHigh, &state->old_high) < 0;
+}
+
+/* Capture the inherited interval and stamp the UPDATE result as branch-local. */
+static void
+BranchPrepareUpdate(Relation relation, TupleTableSlot *oldslot,
+					TupleTableSlot *newslot, BranchModifyState *state)
+{
+	BranchCaptureOld(relation, oldslot, state);
+	if (!state->versioned)
+		return;
+	BranchSetSlotMetadata(relation, newslot, &MyBranchLow, &MyBranchHigh,
+						  MyBranchSegmentId, false);
+}
+
+/*
+ * Insert physical pieces preserving the old value outside the active branch
+ * interval.  DELETE additionally writes an invisible tombstone for the
+ * current interval.  These pieces inherit already-validated user data, so
+ * unique and exclusion checks must not be repeated physically.
+ */
+static void
+BranchInsertVersions(ResultRelInfo *resultRelInfo, EState *estate,
+					 TupleTableSlot *oldslot, BranchModifyState *state,
+					 bool insert_current_tombstone)
+{
+	Relation	relation = resultRelInfo->ri_RelationDesc;
+	TupleTableSlot *fragment;
+	AttrNumber	attnums[BRANCH_HIDDEN_ATTRIBUTE_COUNT];
+	Datum		writerdatum;
+	Datum		deleteddatum;
+	Oid			oldwriter;
+	bool		olddeleted;
+	bool		isnull;
+
+	if (!state->versioned)
+		return;
+	if (!BranchGetAttributeNumbers(relation, attnums))
+		elog(ERROR, "versioned relation \"%s\" lost hidden attributes",
+			 RelationGetRelationName(relation));
+
+	if (relation->rd_rel->relhasindex &&
+		resultRelInfo->ri_IndexRelationDescs == NULL)
+		ExecOpenIndices(resultRelInfo, false);
+
+	writerdatum = slot_getattr(oldslot, attnums[3], &isnull);
+	Assert(!isnull);
+	oldwriter = DatumGetObjectId(writerdatum);
+	deleteddatum = slot_getattr(oldslot, attnums[4], &isnull);
+	Assert(!isnull);
+	olddeleted = DatumGetBool(deleteddatum);
+
+	fragment = table_slot_create(relation, NULL);
+	if (state->left_fragment)
+	{
+		ExecCopySlot(fragment, oldslot);
+		BranchSetSlotMetadata(relation, fragment, &state->old_low,
+						  &MyBranchLow, oldwriter, olddeleted);
+		table_tuple_insert(relation, fragment, estate->es_output_cid, 0, NULL);
+		if (resultRelInfo->ri_NumIndices > 0)
+			list_free(ExecInsertIndexTuples(resultRelInfo, estate,
+										EIIT_BRANCH_HISTORY, fragment, NIL, NULL));
+	}
+	if (state->right_fragment)
+	{
+		ExecClearTuple(fragment);
+		ExecCopySlot(fragment, oldslot);
+		BranchSetSlotMetadata(relation, fragment, &MyBranchHigh,
+						  &state->old_high, oldwriter, olddeleted);
+		table_tuple_insert(relation, fragment, estate->es_output_cid, 0, NULL);
+		if (resultRelInfo->ri_NumIndices > 0)
+			list_free(ExecInsertIndexTuples(resultRelInfo, estate,
+										EIIT_BRANCH_HISTORY, fragment, NIL, NULL));
+	}
+	if (insert_current_tombstone)
+	{
+		ExecClearTuple(fragment);
+		ExecCopySlot(fragment, oldslot);
+		BranchSetSlotMetadata(relation, fragment, &MyBranchLow, &MyBranchHigh,
+						  MyBranchSegmentId, true);
+		table_tuple_insert(relation, fragment, estate->es_output_cid, 0, NULL);
+		if (resultRelInfo->ri_NumIndices > 0)
+			list_free(ExecInsertIndexTuples(resultRelInfo, estate,
+										EIIT_BRANCH_HISTORY, fragment, NIL, NULL));
+	}
+	ExecDropSingleTupleTableSlot(fragment);
+}
 
 /*
  * Context struct containing output data specific to UPDATE operations.
@@ -889,6 +1085,8 @@ ExecInsert(ModifyTableContext *context,
 	OnConflictAction onconflict = node->onConflictAction;
 	PartitionTupleRouting *proute = mtstate->mt_partition_tuple_routing;
 	MemoryContext oldContext;
+	bool		branch_versioned;
+	int64		branch_rowid = 0;
 
 	/*
 	 * If the input result relation is a partitioned table, find the leaf
@@ -907,6 +1105,12 @@ ExecInsert(ModifyTableContext *context,
 	ExecMaterializeSlot(slot);
 
 	resultRelationDesc = resultRelInfo->ri_RelationDesc;
+	branch_versioned = BranchRelationIsVersioned(resultRelationDesc);
+	if (branch_versioned)
+	{
+		BranchAcquireLock(RowExclusiveLock);
+		branch_rowid = BranchTupleRowId(resultRelationDesc, slot);
+	}
 
 	/*
 	 * Open the table's indexes, if we have not done so already, so that we
@@ -935,6 +1139,9 @@ ExecInsert(ModifyTableContext *context,
 		if (!ExecBRInsertTriggers(estate, resultRelInfo, slot))
 			return NULL;		/* "do nothing" */
 	}
+
+	if (branch_versioned)
+		BranchRestoreInsertMetadata(resultRelationDesc, slot, branch_rowid);
 
 	/* INSTEAD OF ROW INSERT Triggers */
 	if (resultRelInfo->ri_TrigDesc &&
@@ -1870,6 +2077,8 @@ ExecDelete(ModifyTableContext *context,
 	TupleTableSlot *slot = NULL;
 	TM_Result	result;
 	bool		saveOld;
+	BranchModifyState branchState = {0};
+	TupleTableSlot *branchOldSlot = NULL;
 
 	if (tupleDeleted)
 		*tupleDeleted = false;
@@ -1932,6 +2141,18 @@ ExecDelete(ModifyTableContext *context,
 		 * transaction-snapshot mode transactions.
 		 */
 ldelete:
+		if (BranchRelationIsVersioned(resultRelationDesc))
+		{
+			if (branchOldSlot == NULL)
+				branchOldSlot = table_slot_create(resultRelationDesc,
+										  &estate->es_tupleTable);
+			else
+				ExecClearTuple(branchOldSlot);
+			if (!table_tuple_fetch_row_version(resultRelationDesc, tupleid,
+										   SnapshotAny, branchOldSlot))
+				elog(ERROR, "failed to fetch branch version being deleted");
+			BranchCaptureOld(resultRelationDesc, branchOldSlot, &branchState);
+		}
 		result = ExecDeleteAct(context, resultRelInfo, tupleid, changingPart);
 
 		if (tmresult)
@@ -1975,6 +2196,8 @@ ldelete:
 				return NULL;
 
 			case TM_Ok:
+				BranchInsertVersions(resultRelInfo, estate, branchOldSlot,
+								 &branchState, true);
 				break;
 
 			case TM_Updated:
@@ -1994,6 +2217,37 @@ ldelete:
 					EvalPlanQualBegin(context->epqstate);
 					inputslot = EvalPlanQualSlot(context->epqstate, resultRelationDesc,
 												 resultRelInfo->ri_RangeTableIndex);
+
+					if (branchOldSlot != NULL &&
+						BranchFindVisibleTuple(resultRelationDesc,
+									   BranchTupleRowId(resultRelationDesc,
+														branchOldSlot),
+									   inputslot))
+					{
+						*tupleid = inputslot->tts_tid;
+						result = table_tuple_lock(resultRelationDesc, tupleid,
+											  SnapshotSelf, inputslot,
+											  estate->es_output_cid,
+											  LockTupleExclusive, LockWaitBlock,
+											  0, &context->tmfd);
+						if (result != TM_Ok)
+							elog(ERROR, "could not lock branch-visible tuple: %u",
+								 result);
+						epqslot = EvalPlanQual(context->epqstate,
+										   resultRelationDesc,
+										   resultRelInfo->ri_RangeTableIndex,
+										   inputslot);
+						if (TupIsNull(epqslot))
+							return NULL;
+						if (epqreturnslot)
+						{
+							*epqreturnslot = epqslot;
+							return NULL;
+						}
+						goto ldelete;
+					}
+					else if (branchOldSlot != NULL)
+						return NULL;
 
 					result = table_tuple_lock(resultRelationDesc, tupleid,
 											  estate->es_snapshot,
@@ -2764,6 +3018,7 @@ ExecUpdate(ModifyTableContext *context, ResultRelInfo *resultRelInfo,
 	Relation	resultRelationDesc = resultRelInfo->ri_RelationDesc;
 	UpdateContext updateCxt = {0};
 	TM_Result	result;
+	BranchModifyState branchState = {0};
 
 	/*
 	 * abort the operation if not running transactions
@@ -2841,6 +3096,7 @@ ExecUpdate(ModifyTableContext *context, ResultRelInfo *resultRelInfo,
 		 */
 redo_act:
 		lockedtid = *tupleid;
+		BranchPrepareUpdate(resultRelationDesc, oldSlot, slot, &branchState);
 		result = ExecUpdateAct(context, resultRelInfo, tupleid, oldtuple, slot,
 							   canSetTag, &updateCxt);
 
@@ -2907,6 +3163,42 @@ redo_act:
 					 */
 					inputslot = EvalPlanQualSlot(context->epqstate, resultRelationDesc,
 												 resultRelInfo->ri_RangeTableIndex);
+
+					if (branchState.versioned)
+					{
+						if (!BranchFindVisibleTuple(resultRelationDesc,
+									 BranchTupleRowId(resultRelationDesc, oldSlot),
+									 inputslot))
+							return NULL;
+						*tupleid = inputslot->tts_tid;
+						result = table_tuple_lock(resultRelationDesc, tupleid,
+											  SnapshotSelf, inputslot,
+											  estate->es_output_cid,
+											  updateCxt.lockmode,
+											  LockWaitBlock, 0,
+											  &context->tmfd);
+						if (result != TM_Ok)
+							elog(ERROR, "could not lock branch-visible tuple: %u",
+								 result);
+						epqslot = EvalPlanQual(context->epqstate,
+										   resultRelationDesc,
+										   resultRelInfo->ri_RangeTableIndex,
+										   inputslot);
+						if (TupIsNull(epqslot))
+							return NULL;
+
+						if (unlikely(!resultRelInfo->ri_projectNewInfoValid))
+							ExecInitUpdateProjection(context->mtstate,
+												 resultRelInfo);
+						oldSlot = resultRelInfo->ri_oldTupleSlot;
+						if (!table_tuple_fetch_row_version(resultRelationDesc,
+												   tupleid, SnapshotAny,
+												   oldSlot))
+							elog(ERROR, "failed to fetch branch-visible tuple being updated");
+						slot = ExecGetUpdateNewTuple(resultRelInfo,
+											 epqslot, oldSlot);
+						goto redo_act;
+					}
 
 					result = table_tuple_lock(resultRelationDesc, tupleid,
 											  estate->es_snapshot,
@@ -3001,6 +3293,8 @@ redo_act:
 		}
 	}
 
+	BranchInsertVersions(resultRelInfo, estate, oldSlot, &branchState, false);
+
 	if (canSetTag)
 		(estate->es_processed)++;
 
@@ -3034,9 +3328,31 @@ ExecOnConflictLockRow(ModifyTableContext *context,
 {
 	TM_FailureData tmfd;
 	TM_Result	test;
+	ItemPointerData lockTid = *conflictTid;
 	Datum		xminDatum;
 	TransactionId xmin;
 	bool		isnull;
+	bool		relocated = false;
+
+	/*
+	 * An interval split replaces one logical row with several independently
+	 * inserted heap tuples, so PostgreSQL's physical CTID chain cannot identify
+	 * the version belonging to this branch.  Serialize by stable row identity
+	 * before taking the ordinary tuple lock.  If the physical tuple changed,
+	 * make the caller redo conflict detection: a same-branch update might also
+	 * have changed the indexed key and invalidated the original conflict.
+	 */
+	if (BranchRelationIsVersioned(relation))
+	{
+		if (!BranchResolveTupleForUpdate(relation, &lockTid, existing,
+										 &relocated))
+			return false;
+		if (relocated)
+		{
+			ExecClearTuple(existing);
+			return false;
+		}
+	}
 
 	/*
 	 * Lock tuple with lockmode.  Don't follow updates when tuple cannot be
@@ -3044,7 +3360,7 @@ ExecOnConflictLockRow(ModifyTableContext *context,
 	 * previous conclusion that the tuple is conclusively committed is not
 	 * true anymore.
 	 */
-	test = table_tuple_lock(relation, conflictTid,
+	test = table_tuple_lock(relation, &lockTid,
 							context->estate->es_snapshot,
 							existing, context->estate->es_output_cid,
 							lockmode, LockWaitBlock, 0,
@@ -3304,10 +3620,23 @@ ExecOnConflictSelect(ModifyTableContext *context,
 	/* Fetch/lock existing tuple, according to the requested lock strength */
 	if (lockStrength == LCS_NONE)
 	{
-		if (!table_tuple_fetch_row_version(relation,
-										   conflictTid,
-										   SnapshotAny,
-										   existing))
+		if (BranchRelationIsVersioned(relation))
+		{
+			ItemPointerData resolvedTid = *conflictTid;
+			bool		relocated;
+
+			/* Even a non-row-locking DO SELECT must not read a sibling version. */
+			if (!BranchResolveTupleForUpdate(relation, &resolvedTid, existing,
+											 &relocated) || relocated)
+			{
+				ExecClearTuple(existing);
+				return false;
+			}
+		}
+		else if (!table_tuple_fetch_row_version(relation,
+										conflictTid,
+										SnapshotAny,
+										existing))
 			elog(ERROR, "failed to fetch conflicting tuple for ON CONFLICT");
 	}
 	else
@@ -3624,6 +3953,7 @@ lmerge_matched:
 		CmdType		commandType = relaction->mas_action->commandType;
 		TM_Result	result;
 		UpdateContext updateCxt = {0};
+		BranchModifyState branchState = {0};
 
 		/*
 		 * Test condition, if any.
@@ -3691,6 +4021,9 @@ lmerge_matched:
 					/* checked ri_needLockTagTuple above */
 					Assert(oldtuple == NULL);
 
+					BranchPrepareUpdate(resultRelInfo->ri_RelationDesc,
+										resultRelInfo->ri_oldTupleSlot,
+										newslot, &branchState);
 					result = ExecUpdateAct(context, resultRelInfo, tupleid,
 										   NULL, newslot, canSetTag,
 										   &updateCxt);
@@ -3714,6 +4047,9 @@ lmerge_matched:
 
 				if (result == TM_Ok)
 				{
+					BranchInsertVersions(resultRelInfo, estate,
+									 resultRelInfo->ri_oldTupleSlot,
+									 &branchState, false);
 					ExecUpdateEpilogue(context, &updateCxt, resultRelInfo,
 									   tupleid, NULL, newslot);
 					mtstate->mt_merge_updated += 1;
@@ -3744,12 +4080,18 @@ lmerge_matched:
 					/* checked ri_needLockTagTuple above */
 					Assert(oldtuple == NULL);
 
+					BranchCaptureOld(resultRelInfo->ri_RelationDesc,
+									 resultRelInfo->ri_oldTupleSlot,
+									 &branchState);
 					result = ExecDeleteAct(context, resultRelInfo, tupleid,
 										   false);
 				}
 
 				if (result == TM_Ok)
 				{
+					BranchInsertVersions(resultRelInfo, estate,
+									 resultRelInfo->ri_oldTupleSlot,
+									 &branchState, true);
 					ExecDeleteEpilogue(context, resultRelInfo, tupleid, NULL,
 									   false);
 					mtstate->mt_merge_deleted += 1;
@@ -3858,7 +4200,35 @@ lmerge_matched:
 					else
 						inputslot = resultRelInfo->ri_oldTupleSlot;
 
-					result = table_tuple_lock(resultRelationDesc, tupleid,
+					if (BranchRelationIsVersioned(resultRelationDesc))
+					{
+						int64		rowid;
+
+						/*
+						 * BranchCaptureOld() acquired the logical-row lock before
+						 * the UPDATE/DELETE attempt.  Locate this branch's fragment
+						 * instead of following the physical update chain, which may
+						 * end at a sibling branch's replacement tuple.
+						 */
+						rowid = BranchTupleRowId(resultRelationDesc,
+												 resultRelInfo->ri_oldTupleSlot);
+						if (!BranchFindVisibleTuple(resultRelationDesc, rowid,
+												inputslot))
+						{
+							*matched = false;
+							goto out;
+						}
+						*tupleid = inputslot->tts_tid;
+						result = table_tuple_lock(resultRelationDesc, tupleid,
+											  SnapshotSelf, inputslot,
+											  estate->es_output_cid,
+											  lockmode, LockWaitBlock, 0,
+											  &context->tmfd);
+						if (result == TM_Ok)
+							context->tmfd.traversed = true;
+					}
+					else
+						result = table_tuple_lock(resultRelationDesc, tupleid,
 											  estate->es_snapshot,
 											  inputslot, estate->es_output_cid,
 											  lockmode, LockWaitBlock,

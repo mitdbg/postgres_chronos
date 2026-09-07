@@ -30,6 +30,7 @@
 #include "access/xact.h"
 #include "catalog/namespace.h"
 #include "catalog/toasting.h"
+#include "commands/branchcmds.h"
 #include "commands/createas.h"
 #include "commands/matview.h"
 #include "commands/prepare.h"
@@ -43,6 +44,7 @@
 #include "parser/analyze.h"
 #include "rewrite/rewriteHandler.h"
 #include "tcop/tcopprot.h"
+#include "tcop/utility.h"
 #include "utils/builtins.h"
 #include "utils/lsyscache.h"
 #include "utils/rls.h"
@@ -58,6 +60,12 @@ typedef struct
 	CommandId	output_cid;		/* cmin to insert in output tuples */
 	uint32		ti_options;		/* table_tuple_insert performance options */
 	BulkInsertState bistate;	/* bulk insert state */
+	TupleTableSlot *branchslot;	/* target-shaped slot with hidden metadata */
+	EState	   *branchestate;
+	ResultRelInfo *branchrelinfo;
+	int			user_natts;
+	BranchCoordinate branchlow;
+	BranchCoordinate branchhigh;
 } DR_intorel;
 
 /* utility functions for CTAS definition creation */
@@ -106,6 +114,34 @@ create_ctas_internal(List *attrList, IntoClause *into)
 	create->tablespacename = into->tableSpaceName;
 	create->if_not_exists = false;
 	create->accessMethod = into->accessMethod;
+
+	/*
+	 * Ordinary CREATE TABLE runs through transformCreateStmt(), which adds
+	 * the engine-owned interval attributes, identity sequence and metadata
+	 * indexes.  CTAS historically called DefineRelation() directly and would
+	 * otherwise bypass that transformation.  Execute the synthesized CREATE
+	 * TABLE as an internal utility subcommand so CTAS and SELECT INTO have
+	 * precisely the same physical representation as a normal table.
+	 *
+	 * Materialized views retain their existing representation: REFRESH uses a
+	 * separate replacement-heap path and they are not database branch tables.
+	 */
+	if (!is_matview)
+	{
+		PlannedStmt *wrapper = makeNode(PlannedStmt);
+		Oid			relid;
+
+		wrapper->commandType = CMD_UTILITY;
+		wrapper->canSetTag = false;
+		wrapper->utilityStmt = (Node *) create;
+		wrapper->planOrigin = PLAN_STMT_INTERNAL;
+		ProcessUtility(wrapper, "<internal CREATE TABLE AS storage>", false,
+					   PROCESS_UTILITY_SUBCOMMAND, NULL, NULL, None_Receiver,
+					   NULL);
+		relid = RangeVarGetRelid(into->rel, NoLock, false);
+		ObjectAddressSet(intoRelationAddr, RelationRelationId, relid);
+		return intoRelationAddr;
+	}
 
 	/*
 	 * Create the relation.  (This will error out if there's an existing view,
@@ -560,6 +596,25 @@ intorel_startup(DestReceiver *self, int operation, TupleDesc typeinfo)
 	myState->output_cid = GetCurrentCommandId(true);
 	myState->ti_options = TABLE_INSERT_SKIP_FSM;
 
+	if (BranchRelationIsVersioned(intoRelationDesc))
+	{
+		AttrNumber	attnums[BRANCH_HIDDEN_ATTRIBUTE_COUNT];
+
+		BranchAcquireLock(RowExclusiveLock);
+		if (!BranchGetAttributeNumbers(intoRelationDesc, attnums))
+			elog(ERROR, "versioned CTAS relation lost hidden attributes");
+
+		myState->user_natts = typeinfo->natts;
+		myState->branchslot = table_slot_create(intoRelationDesc, NULL);
+		myState->branchlow = MyBranchLow;
+		myState->branchhigh = MyBranchHigh;
+		myState->branchestate = CreateExecutorState();
+		myState->branchestate->es_output_cid = myState->output_cid;
+		myState->branchrelinfo = palloc0_object(ResultRelInfo);
+		InitResultRelInfo(myState->branchrelinfo, intoRelationDesc, 0, NULL, 0);
+		ExecOpenIndices(myState->branchrelinfo, false);
+	}
+
 	/*
 	 * If WITH NO DATA is specified, there is no need to set up the state for
 	 * bulk inserts as there are no tuples to insert.
@@ -583,10 +638,48 @@ static bool
 intorel_receive(TupleTableSlot *slot, DestReceiver *self)
 {
 	DR_intorel *myState = (DR_intorel *) self;
+	TupleTableSlot *insertslot = slot;
 
 	/* Nothing to insert if WITH NO DATA is specified. */
 	if (!myState->into->skipData)
 	{
+		if (myState->branchslot != NULL)
+		{
+			AttrNumber	attnums[BRANCH_HIDDEN_ATTRIBUTE_COUNT];
+			TupleTableSlot *target = myState->branchslot;
+
+			if (!BranchGetAttributeNumbers(myState->rel, attnums))
+				elog(ERROR, "versioned CTAS relation lost hidden attributes");
+			slot_getallattrs(slot);
+			ExecClearTuple(target);
+			for (int i = 0; i < myState->user_natts; i++)
+			{
+				target->tts_values[i] = slot->tts_values[i];
+				target->tts_isnull[i] = slot->tts_isnull[i];
+			}
+			for (int i = myState->user_natts;
+				 i < RelationGetDescr(myState->rel)->natts; i++)
+				target->tts_isnull[i] = true;
+
+			target->tts_values[attnums[0] - 1] =
+				Int64GetDatum(BranchNextRowId());
+			target->tts_isnull[attnums[0] - 1] = false;
+			target->tts_values[attnums[1] - 1] =
+				BranchCoordinatePGetDatum(&myState->branchlow);
+			target->tts_isnull[attnums[1] - 1] = false;
+			target->tts_values[attnums[2] - 1] =
+				BranchCoordinatePGetDatum(&myState->branchhigh);
+			target->tts_isnull[attnums[2] - 1] = false;
+			target->tts_values[attnums[3] - 1] =
+				ObjectIdGetDatum(MyBranchSegmentId);
+			target->tts_isnull[attnums[3] - 1] = false;
+			target->tts_values[attnums[4] - 1] = BoolGetDatum(false);
+			target->tts_isnull[attnums[4] - 1] = false;
+			target->tts_nvalid = RelationGetDescr(myState->rel)->natts;
+			ExecStoreVirtualTuple(target);
+			insertslot = target;
+		}
+
 		/*
 		 * Note that the input slot might not be of the type of the target
 		 * relation. That's supported by table_tuple_insert(), but slightly
@@ -596,13 +689,18 @@ intorel_receive(TupleTableSlot *slot, DestReceiver *self)
 		 * data (say a tuple's xmin), but since we don't do that here...
 		 */
 		table_tuple_insert(myState->rel,
-						   slot,
+						   insertslot,
 						   myState->output_cid,
 						   myState->ti_options,
 						   myState->bistate);
+		if (myState->branchrelinfo != NULL &&
+			myState->branchrelinfo->ri_NumIndices > 0)
+			list_free(ExecInsertIndexTuples(myState->branchrelinfo,
+										myState->branchestate, 0,
+										insertslot, NIL, NULL));
 	}
 
-	/* We know this is a newly created relation, so there are no indexes */
+	/* Branch metadata indexes are created with the relation and maintained. */
 
 	return true;
 }
@@ -620,6 +718,15 @@ intorel_shutdown(DestReceiver *self)
 	{
 		FreeBulkInsertState(myState->bistate);
 		table_finish_bulk_insert(myState->rel, myState->ti_options);
+	}
+	if (myState->branchrelinfo != NULL)
+	{
+		ExecCloseIndices(myState->branchrelinfo);
+		ExecDropSingleTupleTableSlot(myState->branchslot);
+		FreeExecutorState(myState->branchestate);
+		myState->branchrelinfo = NULL;
+		myState->branchslot = NULL;
+		myState->branchestate = NULL;
 	}
 
 	/* close rel, but keep lock until commit */

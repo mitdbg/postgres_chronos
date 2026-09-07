@@ -44,6 +44,7 @@
 #include "access/xact.h"
 #include "catalog/namespace.h"
 #include "catalog/partition.h"
+#include "commands/branchcmds.h"
 #include "commands/matview.h"
 #include "commands/trigger.h"
 #include "executor/executor.h"
@@ -151,6 +152,22 @@ standard_ExecutorStart(QueryDesc *queryDesc, int eflags)
 
 	/* caller must ensure the query's snapshot is active */
 	Assert(GetActiveSnapshot() == queryDesc->snapshot);
+
+	/*
+	 * Cached plans do not pass through rewrite again.  Refresh the selected
+	 * branch and reacquire its transaction-scoped lock before using one.
+	 * Branch lifecycle commands broadcast a relcache invalidation whenever a
+	 * branch point changes, so a plan containing the old point is replanned.
+	 */
+	if (BranchDatabaseIsEnabled())
+	{
+		BranchEnsureSession();
+		if (queryDesc->plannedstmt->resultRelationRelids != NULL)
+		{
+			BranchAcquireLock(RowExclusiveLock);
+			BranchPrepareExecutorLocks(queryDesc->plannedstmt);
+		}
+	}
 
 	/*
 	 * If the transaction is read-only, we need to check if any writes are
@@ -2936,9 +2953,26 @@ EvalPlanQualFetchRowMark(EPQState *epqstate, Index rti, TupleTableSlot *slot)
 		else
 		{
 			/* ordinary table, fetch the tuple */
-			if (!table_tuple_fetch_row_version(erm->relation,
-											   (ItemPointer) DatumGetPointer(datum),
-											   SnapshotAny, slot))
+			if (BranchRelationIsVersioned(erm->relation))
+			{
+				ItemPointerData tid = *((ItemPointer) DatumGetPointer(datum));
+				bool		relocated;
+				bool		would_block;
+
+				/*
+				 * A sibling interval split has no CTID link to this branch's
+				 * surviving fragment.  Resolve the non-locking EPQ row mark by
+				 * logical identity so a join recheck cannot accidentally consume
+				 * the sibling's replacement tuple or lose the row altogether.
+				 */
+				if (!BranchResolveTupleForLock(erm->relation, &tid, slot,
+											 LockWaitBlock, &relocated,
+											 &would_block))
+					return false;
+			}
+			else if (!table_tuple_fetch_row_version(erm->relation,
+												(ItemPointer) DatumGetPointer(datum),
+												SnapshotAny, slot))
 				elog(ERROR, "failed to fetch tuple for EvalPlanQual recheck");
 			return true;
 		}

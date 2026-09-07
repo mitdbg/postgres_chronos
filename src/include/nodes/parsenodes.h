@@ -775,6 +775,7 @@ typedef struct ColumnDef
 	bool		is_local;		/* column has local (non-inherited) def'n */
 	bool		is_not_null;	/* NOT NULL constraint specified? */
 	bool		is_from_type;	/* column definition came from table type */
+	bool		is_hidden;		/* engine-owned, not addressable by user SQL */
 	char		storage;		/* attstorage setting, or 0 for default */
 	char	   *storage_name;	/* attstorage setting name or NULL for default */
 	Node	   *raw_default;	/* default value (untransformed parse tree) */
@@ -4489,6 +4490,30 @@ typedef struct CreatePublicationStmt
 	bool		for_all_sequences;	/* Special publication for all sequences
 									 * in db */
 } CreatePublicationStmt;
+
+/* ----------------------
+ *		CREATE BRANCH
+ * ----------------------
+ */
+typedef struct CreateBranchStmt
+{
+	NodeTag		type;
+	char	   *branchname;
+	char	   *frombranch;	/* NULL means the session branch */
+	bool		if_not_exists;
+} CreateBranchStmt;
+
+/* ----------------------
+ *		DROP BRANCH
+ * ----------------------
+ */
+typedef struct DropBranchStmt
+{
+	NodeTag		type;
+	char	   *branchname;
+	bool		missing_ok;
+	DropBehavior behavior;
+} DropBranchStmt;
 
 typedef enum AlterPublicationAction
 {

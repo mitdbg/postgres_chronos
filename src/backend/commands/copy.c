@@ -1077,9 +1077,9 @@ CopyGetAttnums(TupleDesc tupDesc, Relation rel, List *attnamelist)
 
 		for (i = 0; i < attr_count; i++)
 		{
-			CompactAttribute *attr = TupleDescCompactAttr(tupDesc, i);
+			Form_pg_attribute attr = TupleDescAttr(tupDesc, i);
 
-			if (attr->attisdropped || attr->attgenerated)
+			if (attr->attisdropped || attr->attgenerated || attr->attishidden)
 				continue;
 			attnums = lappend_int(attnums, i + 1);
 		}
@@ -1101,7 +1101,7 @@ CopyGetAttnums(TupleDesc tupDesc, Relation rel, List *attnamelist)
 			{
 				Form_pg_attribute att = TupleDescAttr(tupDesc, i);
 
-				if (att->attisdropped)
+				if (att->attisdropped || att->attishidden)
 					continue;
 				if (namestrcmp(&(att->attname), name) == 0)
 				{

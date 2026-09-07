@@ -23,6 +23,7 @@ OBJS = \
 	arrayutils.o \
 	ascii.o \
 	bool.o \
+	branchcoord.o \
 	bytea.o \
 	cash.o \
 	char.o \

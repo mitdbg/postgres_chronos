@@ -25,6 +25,7 @@
 #include "access/table.h"
 #include "catalog/dependency.h"
 #include "commands/trigger.h"
+#include "commands/branchcmds.h"
 #include "executor/executor.h"
 #include "foreign/fdwapi.h"
 #include "miscadmin.h"
@@ -43,6 +44,7 @@
 #include "rewrite/rowsecurity.h"
 #include "tcop/tcopprot.h"
 #include "utils/builtins.h"
+#include "utils/branchcoord.h"
 #include "utils/lsyscache.h"
 #include "utils/rel.h"
 
@@ -2262,6 +2264,7 @@ fireRIRrules(Query *parsetree, List *activeRIRs)
 		List	   *withCheckOptions;
 		bool		hasRowSecurity;
 		bool		hasSubLinks;
+		AttrNumber	branchattrs[BRANCH_HIDDEN_ATTRIBUTE_COUNT];
 
 		++rt_index;
 
@@ -2273,12 +2276,72 @@ fireRIRrules(Query *parsetree, List *activeRIRs)
 
 		rel = relation_open(rte->relid, NoLock);
 
+		if (BranchGetAttributeNumbers(rel, branchattrs))
+		{
+			bool		private_target;
+			BranchCoordinate *point = palloc_object(BranchCoordinate);
+			Const	   *pointconst;
+			Expr	   *lowqual;
+			Expr	   *highqual;
+			Expr	   *deletedqual;
+
+			BranchAcquireLock(rt_index == parsetree->resultRelation ?
+							  RowExclusiveLock : AccessShareLock);
+			private_target = rt_index == parsetree->resultRelation &&
+				(parsetree->commandType == CMD_UPDATE ||
+				 parsetree->commandType == CMD_DELETE ||
+				 parsetree->commandType == CMD_MERGE) &&
+				BranchRelationCanModifyInPlace(rel);
+			if (private_target)
+			{
+				/*
+				 * The branch lock prevents a concurrent fork, and exact schema
+				 * ownership guarantees every physical row belongs to this branch.
+				 * Ordinary PostgreSQL DML therefore needs no interval filter.
+				 */
+				securityQuals = NIL;
+				goto branch_quals_done;
+			}
+			*point = MyBranchPoint;
+			pointconst = makeConst(PG_BRANCH_COORDOID, -1, InvalidOid,
+								   sizeof(BranchCoordinate),
+								   BranchCoordinatePGetDatum(point), false, false);
+			lowqual = make_opclause(BranchCoordinateLessEqualOperator,
+								BOOLOID, false,
+								(Expr *) makeVar(rt_index, branchattrs[1],
+												 PG_BRANCH_COORDOID, -1,
+												 InvalidOid, 0),
+								(Expr *) copyObject(pointconst),
+								InvalidOid, InvalidOid);
+			highqual = make_opclause(BranchCoordinateLessOperator,
+								 BOOLOID, false,
+								 (Expr *) copyObject(pointconst),
+								 (Expr *) makeVar(rt_index, branchattrs[2],
+												  PG_BRANCH_COORDOID, -1,
+												  InvalidOid, 0),
+								 InvalidOid, InvalidOid);
+			deletedqual = makeBoolExpr(NOT_EXPR,
+								   list_make1(makeVar(rt_index, branchattrs[4],
+													 BOOLOID, -1,
+													 InvalidOid, 0)), -1);
+			securityQuals = list_make3(lowqual, highqual, deletedqual);
+		branch_quals_done:
+			;
+		}
+		else
+			securityQuals = NIL;
+
 		/*
 		 * Fetch any new security quals that must be applied to this RTE.
 		 */
-		get_row_security_policies(parsetree, rte, rt_index,
-								  &securityQuals, &withCheckOptions,
+		{
+			List *rlsSecurityQuals;
+
+			get_row_security_policies(parsetree, rte, rt_index,
+								  &rlsSecurityQuals, &withCheckOptions,
 								  &hasRowSecurity, &hasSubLinks);
+			securityQuals = list_concat(securityQuals, rlsSecurityQuals);
+		}
 
 		if (securityQuals != NIL || withCheckOptions != NIL)
 		{

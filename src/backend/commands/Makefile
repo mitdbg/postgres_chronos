@@ -18,6 +18,7 @@ OBJS = \
 	amcmds.o \
 	analyze.o \
 	async.o \
+	branchcmds.o \
 	collationcmds.o \
 	comment.o \
 	constraint.o \

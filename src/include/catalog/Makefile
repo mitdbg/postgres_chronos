@@ -49,6 +49,9 @@ CATALOG_HEADERS := \
 	pg_conversion.h \
 	pg_depend.h \
 	pg_database.h \
+	pg_branch.h \
+	pg_branch_segment.h \
+	pg_branch_relversion.h \
 	pg_db_role_setting.h \
 	pg_tablespace.h \
 	pg_authid.h \
@@ -100,6 +103,9 @@ POSTGRES_BKI_DATA = \
 	pg_amproc.dat \
 	pg_authid.dat \
 	pg_auth_members.dat \
+	pg_branch.dat \
+	pg_branch_segment.dat \
+	pg_branch_relversion.dat \
 	pg_cast.dat \
 	pg_class.dat \
 	pg_collation.dat \

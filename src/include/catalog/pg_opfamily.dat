@@ -148,6 +148,8 @@
   opfmethod => 'btree', opfname => 'pg_lsn_ops' },
 { oid => '3254',
   opfmethod => 'hash', opfname => 'pg_lsn_ops' },
+{ oid => '9030',
+  opfmethod => 'btree', opfname => 'pg_branch_coord_ops' },
 { oid => '3522',
   opfmethod => 'btree', opfname => 'enum_ops' },
 { oid => '3523',

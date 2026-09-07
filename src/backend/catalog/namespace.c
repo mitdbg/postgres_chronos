@@ -41,6 +41,7 @@
 #include "catalog/pg_ts_parser.h"
 #include "catalog/pg_ts_template.h"
 #include "catalog/pg_type.h"
+#include "commands/branchcmds.h"
 #include "common/hashfn_unstable.h"
 #include "funcapi.h"
 #include "mb/pg_wchar.h"
@@ -539,6 +540,9 @@ RangeVarGetRelidExtended(const RangeVar *relation, LOCKMODE lockmode,
 			/* search the namespace path */
 			relId = RelnameGetRelid(relation->relname);
 		}
+
+		/* Resolve a logical user table to this branch's physical schema version. */
+		relId = BranchResolveRelationOid(relId);
 
 		/*
 		 * Invoke caller-supplied callback, if any.

@@ -21,6 +21,7 @@
 #include "access/table.h"
 #include "catalog/heap.h"
 #include "catalog/namespace.h"
+#include "commands/branchcmds.h"
 #include "funcapi.h"
 #include "nodes/makefuncs.h"
 #include "nodes/nodeFuncs.h"
@@ -1248,7 +1249,8 @@ buildRelationAliases(TupleDesc tupdesc, Alias *alias, Alias *eref)
 		Form_pg_attribute attr = TupleDescAttr(tupdesc, varattno);
 		String	   *attrname;
 
-		if (attr->attisdropped)
+		if (attr->attisdropped ||
+			(attr->attishidden && !BranchSchemaCopyInProgress()))
 		{
 			/* Always insert an empty string for a dropped column */
 			attrname = makeString(pstrdup(""));
@@ -1355,7 +1357,8 @@ buildNSItemFromTupleDesc(RangeTblEntry *rte, Index rtindex,
 		Form_pg_attribute attr = TupleDescAttr(tupdesc, varattno);
 
 		/* For a dropped column, just leave the entry as zeroes */
-		if (attr->attisdropped)
+		if (attr->attisdropped ||
+			(attr->attishidden && !BranchSchemaCopyInProgress()))
 			continue;
 
 		nscolumns[varattno].p_varno = rtindex;
@@ -1926,11 +1929,11 @@ addRangeTableEntryForFunction(ParseState *pstate,
 			 * in the RangeTblFunction's lists.  Limit number of columns to
 			 * MaxHeapAttributeNumber, because CheckAttributeNamesTypes will.
 			 */
-			if (list_length(coldeflist) > MaxHeapAttributeNumber)
+			if (list_length(coldeflist) > MaxUserHeapAttributeNumber)
 				ereport(ERROR,
 						(errcode(ERRCODE_TOO_MANY_COLUMNS),
 						 errmsg("column definition lists can have at most %d entries",
-								MaxHeapAttributeNumber),
+								MaxUserHeapAttributeNumber),
 						 parser_errposition(pstate,
 											exprLocation((Node *) coldeflist))));
 			tupdesc = CreateTemplateTupleDesc(list_length(coldeflist));

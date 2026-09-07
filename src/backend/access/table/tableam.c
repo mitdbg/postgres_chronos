@@ -24,6 +24,7 @@
 #include "access/syncscan.h"
 #include "access/tableam.h"
 #include "access/xact.h"
+#include "commands/branchcmds.h"
 #include "optimizer/optimizer.h"
 #include "optimizer/plancat.h"
 #include "port/pg_bitutils.h"
@@ -256,6 +257,49 @@ table_index_fetch_tuple_check(Relation rel,
 	table_index_fetch_end(scan);
 	ExecDropSingleTupleTableSlot(slot);
 
+	return found;
+}
+
+/*
+ * Variant used by unique checks on versioned relations.  A HOT chain can
+ * contain several physical versions for one index TID, so inspect every
+ * version accepted by the supplied snapshot until a branch-visible one is
+ * found.
+ */
+bool
+table_index_fetch_tuple_check_branch(Relation rel,
+									 ItemPointer tid,
+									 Snapshot snapshot,
+									 bool *all_dead)
+{
+	IndexFetchTableData *scan;
+	TupleTableSlot *slot;
+	bool		call_again = false;
+	bool		found = false;
+	bool		version_all_dead = false;
+
+	if (!BranchRelationIsVersioned(rel))
+		return table_index_fetch_tuple_check(rel, tid, snapshot, all_dead);
+
+	if (all_dead)
+		*all_dead = true;
+	slot = table_slot_create(rel, NULL);
+	scan = table_index_fetch_begin(rel, SO_NONE);
+	do
+	{
+		ExecClearTuple(slot);
+		version_all_dead = false;
+		found = table_index_fetch_tuple(scan, tid, snapshot, slot,
+									  &call_again, &version_all_dead);
+		if (all_dead && !version_all_dead)
+			*all_dead = false;
+		if (found && BranchTupleSlotIsVisible(rel, slot))
+			break;
+		found = false;
+	} while (call_again);
+
+	table_index_fetch_end(scan);
+	ExecDropSingleTupleTableSlot(slot);
 	return found;
 }
 

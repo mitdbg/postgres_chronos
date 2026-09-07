@@ -19,6 +19,9 @@
  * string literal (including a function body!) or a multiline comment.
  */
 
+-- Database-local allocator for engine-owned logical row identities.
+CREATE SEQUENCE pg_catalog.pg_branch_rowid_seq AS bigint;
+
 CREATE VIEW pg_roles AS
     SELECT
         rolname,
