@@ -365,7 +365,7 @@ CREATE VIEW attributes AS
          LEFT JOIN (pg_collation co JOIN pg_namespace nco ON (co.collnamespace = nco.oid))
            ON a.attcollation = co.oid AND (nco.nspname, co.collname) <> ('pg_catalog', 'default')
 
-    WHERE a.attnum > 0 AND NOT a.attisdropped
+    WHERE a.attnum > 0 AND NOT a.attisdropped AND NOT a.attishidden
           AND c.relkind IN ('c')
           AND (pg_has_role(c.relowner, 'USAGE')
                OR has_type_privilege(c.reltype, 'USAGE'));
@@ -550,7 +550,7 @@ CREATE VIEW column_domain_usage AS
           AND t.typtype = 'd'
           AND c.relkind IN ('r', 'v', 'f', 'p')
           AND a.attnum > 0
-          AND NOT a.attisdropped
+          AND NOT a.attisdropped AND NOT a.attishidden
           AND pg_has_role(t.typowner, 'USAGE');
 
 GRANT SELECT ON column_domain_usage TO PUBLIC;
@@ -592,7 +592,7 @@ CREATE VIEW column_privileges AS
                 pg_attribute a
            WHERE a.attrelid = pr_c.oid
                  AND a.attnum > 0
-                 AND NOT a.attisdropped
+                 AND NOT a.attisdropped AND NOT a.attishidden
            UNION
            SELECT pr_a.grantor,
                   pr_a.grantee,
@@ -605,7 +605,7 @@ CREATE VIEW column_privileges AS
            FROM (SELECT attrelid, attname, (aclexplode(coalesce(attacl, acldefault('c', relowner)))).*
                  FROM pg_attribute a JOIN pg_class cc ON (a.attrelid = cc.oid)
                  WHERE attnum > 0
-                       AND NOT attisdropped
+                       AND NOT attisdropped AND NOT attishidden
                 ) pr_a (attrelid, attname, grantor, grantee, prtype, grantable),
                 pg_class c
            WHERE pr_a.attrelid = c.oid
@@ -652,7 +652,7 @@ CREATE VIEW column_udt_usage AS
     WHERE a.attrelid = c.oid
           AND a.atttypid = t.oid
           AND nc.oid = c.relnamespace
-          AND a.attnum > 0 AND NOT a.attisdropped
+          AND a.attnum > 0 AND NOT a.attisdropped AND NOT a.attishidden
           AND c.relkind in ('r', 'v', 'f', 'p')
           AND pg_has_role(coalesce(bt.typowner, t.typowner), 'USAGE');
 
@@ -666,8 +666,8 @@ GRANT SELECT ON column_udt_usage TO PUBLIC;
 
 CREATE VIEW columns AS
     SELECT CAST(current_database() AS sql_identifier) AS table_catalog,
-           CAST(nc.nspname AS sql_identifier) AS table_schema,
-           CAST(c.relname AS sql_identifier) AS table_name,
+           CAST(lnc.nspname AS sql_identifier) AS table_schema,
+           CAST(lc.relname AS sql_identifier) AS table_name,
            CAST(a.attname AS sql_identifier) AS column_name,
            CAST(a.attnum AS cardinal_number) AS ordinal_position,
            CAST(CASE WHEN a.attgenerated = '' THEN pg_get_expr(ad.adbin, ad.adrelid) END AS character_data) AS column_default,
@@ -769,6 +769,8 @@ CREATE VIEW columns AS
 
     FROM (pg_attribute a LEFT JOIN pg_attrdef ad ON attrelid = adrelid AND attnum = adnum)
          JOIN (pg_class c JOIN pg_namespace nc ON (c.relnamespace = nc.oid)) ON a.attrelid = c.oid
+         JOIN pg_class lc ON (lc.oid = pg_branch_logical_relation(c.oid))
+         JOIN pg_namespace lnc ON (lc.relnamespace = lnc.oid)
          JOIN (pg_type t JOIN pg_namespace nt ON (t.typnamespace = nt.oid)) ON a.atttypid = t.oid
          LEFT JOIN (pg_type bt JOIN pg_namespace nbt ON (bt.typnamespace = nbt.oid))
            ON (t.typtype = 'd' AND t.typbasetype = bt.oid)
@@ -779,7 +781,8 @@ CREATE VIEW columns AS
 
     WHERE (NOT pg_is_other_temp_schema(nc.oid))
 
-          AND a.attnum > 0 AND NOT a.attisdropped
+          AND a.attnum > 0 AND NOT a.attisdropped AND NOT a.attishidden
+          AND pg_branch_relation_is_current(c.oid)
           AND c.relkind IN ('r', 'v', 'f', 'p')
 
           AND (pg_has_role(c.relowner, 'USAGE')
@@ -817,7 +820,7 @@ CREATE VIEW constraint_column_usage AS
             AND c.connamespace = nc.oid
             AND c.contype = 'c'
             AND r.relkind IN ('r', 'p')
-            AND NOT a.attisdropped
+            AND NOT a.attisdropped AND NOT a.attishidden
 
         UNION ALL
 
@@ -831,7 +834,7 @@ CREATE VIEW constraint_column_usage AS
             AND c.connamespace = nc.oid
             AND c.contype = 'n'
             AND r.relkind in ('r', 'p')
-            AND not a.attisdropped
+            AND not a.attisdropped AND NOT a.attishidden
 
         UNION ALL
 
@@ -844,7 +847,7 @@ CREATE VIEW constraint_column_usage AS
             AND nc.oid = c.connamespace
             AND r.oid = CASE c.contype WHEN 'f' THEN c.confrelid ELSE c.conrelid END
             AND a.attnum = ANY (CASE c.contype WHEN 'f' THEN c.confkey ELSE c.conkey END)
-            AND NOT a.attisdropped
+            AND NOT a.attisdropped AND NOT a.attishidden
             AND c.contype IN ('p', 'u', 'f')
             AND r.relkind IN ('r', 'p')
 
@@ -1103,7 +1106,7 @@ CREATE VIEW key_column_usage AS
                 AND (NOT pg_is_other_temp_schema(nr.oid)) ) AS ss
     WHERE ss.roid = a.attrelid
           AND a.attnum = (ss.x).x
-          AND NOT a.attisdropped
+          AND NOT a.attisdropped AND NOT a.attishidden
           AND (pg_has_role(relowner, 'USAGE')
                OR has_column_privilege(roid, a.attnum,
                                        'SELECT, INSERT, UPDATE, REFERENCES'));
@@ -2737,7 +2740,7 @@ CREATE VIEW element_types AS
            FROM pg_class c, pg_attribute a
            WHERE c.oid = a.attrelid
                  AND c.relkind IN ('r', 'v', 'f', 'c', 'p')
-                 AND attnum > 0 AND NOT attisdropped
+                 AND attnum > 0 AND NOT attisdropped AND NOT attishidden
 
            UNION ALL
 
@@ -3066,10 +3069,10 @@ CREATE VIEW pg_edge_table_components AS
          (SELECT * FROM pg_propgraph_element WHERE pgekind = 'v') AS v
            ON eg.vertexid = v.oid
          JOIN
-         (SELECT * FROM pg_attribute WHERE NOT attisdropped) AS ae
+         (SELECT * FROM pg_attribute WHERE NOT attisdropped AND NOT attishidden) AS ae
            ON eg.pgerelid = ae.attrelid AND (eg.egkey).x = ae.attnum
          JOIN
-         (SELECT * FROM pg_attribute WHERE NOT attisdropped) AS av
+         (SELECT * FROM pg_attribute WHERE NOT attisdropped AND NOT attishidden) AS av
            ON v.pgerelid = av.attrelid AND (eg.egref).x = av.attnum
     WHERE NOT pg_is_other_temp_schema(npg.oid)
           AND (pg_has_role(pg.relowner, 'USAGE')
@@ -3106,7 +3109,7 @@ CREATE VIEW pg_element_table_key_columns AS
          (SELECT pgepgid, pgealias, pgerelid, _pg_expandarray(pgekey) AS ekey FROM pg_propgraph_element) AS el
            ON pg.oid = el.pgepgid
          JOIN
-         (SELECT * FROM pg_attribute WHERE NOT attisdropped) AS a
+         (SELECT * FROM pg_attribute WHERE NOT attisdropped AND NOT attishidden) AS a
            ON el.pgerelid = a.attrelid AND (el.ekey).x = a.attnum
     WHERE NOT pg_is_other_temp_schema(npg.oid)
           AND (pg_has_role(pg.relowner, 'USAGE')

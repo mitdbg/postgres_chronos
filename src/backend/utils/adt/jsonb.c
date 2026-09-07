@@ -1009,7 +1009,7 @@ composite_to_jsonb(Datum composite, JsonbInState *result)
 		JsonbValue	v;
 		Form_pg_attribute att = TupleDescAttr(tupdesc, i);
 
-		if (att->attisdropped)
+		if (att->attisdropped || att->attishidden)
 			continue;
 
 		attname = NameStr(att->attname);

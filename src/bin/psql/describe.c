@@ -1108,7 +1108,9 @@ permissionsList(const char *pattern, bool showSystem)
 					  ",\n  pg_catalog.array_to_string(ARRAY(\n"
 					  "    SELECT attname || E':\\n  ' || pg_catalog.array_to_string(attacl, E'\\n  ')\n"
 					  "    FROM pg_catalog.pg_attribute a\n"
-					  "    WHERE attrelid = c.oid AND NOT attisdropped AND attacl IS NOT NULL\n"
+						  "    WHERE attrelid = c.oid AND NOT attisdropped "
+						  "AND coalesce((pg_catalog.to_jsonb(a)->>'attishidden')::pg_catalog.bool, false) = false "
+						  "AND attacl IS NOT NULL\n"
 					  "  ), E'\\n') AS \"%s\"",
 					  gettext_noop("Column privileges"));
 
@@ -2128,6 +2130,9 @@ describeOneTableDetails(const char *schemaname,
 
 	appendPQExpBufferStr(&buf, "\nFROM pg_catalog.pg_attribute a");
 	appendPQExpBuffer(&buf, "\nWHERE a.attrelid = '%s' AND a.attnum > 0 AND NOT a.attisdropped", oid);
+	if (pset.sversion >= 90400)
+		appendPQExpBufferStr(&buf,
+							 " AND coalesce((pg_catalog.to_jsonb(a)->>'attishidden')::pg_catalog.bool, false) = false");
 	appendPQExpBufferStr(&buf, "\nORDER BY a.attnum;");
 
 	res = PSQLexec(buf.data);
@@ -2588,8 +2593,10 @@ describeOneTableDetails(const char *schemaname,
 							  CppAsString2(CONSTRAINT_PRIMARY) ","
 							  CppAsString2(CONSTRAINT_UNIQUE) ","
 							  CppAsString2(CONSTRAINT_EXCLUSION) "))\n"
-							  "WHERE c.oid = '%s' AND c.oid = i.indrelid AND i.indexrelid = c2.oid\n"
-							  "ORDER BY i.indisprimary DESC, c2.relname;",
+								  "WHERE c.oid = '%s' AND c.oid = i.indrelid AND i.indexrelid = c2.oid\n"
+								  "AND NOT EXISTS (SELECT 1 FROM pg_catalog.pg_attribute ia "
+								  "WHERE ia.attrelid = i.indexrelid AND pg_catalog.left(ia.attname, 12) = '__pg_branch_')\n"
+								  "ORDER BY i.indisprimary DESC, c2.relname;",
 							  oid);
 			result = PSQLexec(buf.data);
 			if (!result)
@@ -4385,6 +4392,24 @@ listTables(const char *tabtypes, const char *pattern, bool verbose, bool showSys
 
 	appendPQExpBufferStr(&buf, "''");	/* dummy */
 	appendPQExpBufferStr(&buf, ")\n");
+	if (pset.sversion >= 90400)
+		appendPQExpBufferStr(&buf,
+							 "      AND NOT EXISTS (\n"
+							 "        SELECT 1 FROM pg_catalog.pg_depend d\n"
+							 "        JOIN pg_catalog.pg_attribute a ON "
+							 "(a.attrelid = d.refobjid AND a.attnum = d.refobjsubid)\n"
+							 "        WHERE c.relkind = " CppAsString2(RELKIND_SEQUENCE)
+							 " AND d.classid = 'pg_catalog.pg_class'::pg_catalog.regclass\n"
+							 "          AND d.objid = c.oid AND d.deptype = 'i'\n"
+							 "          AND coalesce((pg_catalog.to_jsonb(a)->>'attishidden')::pg_catalog.bool, false))\n");
+	appendPQExpBufferStr(&buf,
+						 "      AND NOT (c.relkind IN (" CppAsString2(RELKIND_INDEX) ","
+						 CppAsString2(RELKIND_PARTITIONED_INDEX) ") AND EXISTS (\n"
+						 "        SELECT 1 FROM pg_catalog.pg_attribute ia\n"
+						 "        WHERE ia.attrelid = c.oid AND pg_catalog.left(ia.attname, 12) = '__pg_branch_'))\n");
+	appendPQExpBufferStr(&buf,
+						 "      AND NOT (n.nspname = 'pg_catalog' AND "
+						 "c.relname = 'pg_branch_rowid_seq')\n");
 
 	if (!showSystem && !pattern)
 		appendPQExpBufferStr(&buf, "      AND n.nspname <> 'pg_catalog'\n"

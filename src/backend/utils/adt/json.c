@@ -561,7 +561,7 @@ composite_to_json(Datum composite, StringInfo result, bool use_line_feeds)
 		Oid			outfuncoid;
 		Form_pg_attribute att = TupleDescAttr(tupdesc, i);
 
-		if (att->attisdropped)
+		if (att->attisdropped || att->attishidden)
 			continue;
 
 		if (needsep)

@@ -19,6 +19,7 @@
 #include "access/detoast.h"
 #include "access/htup_details.h"
 #include "catalog/pg_type.h"
+#include "commands/branchcmds.h"
 #include "funcapi.h"
 #include "libpq/pqformat.h"
 #include "miscadmin.h"
@@ -170,7 +171,7 @@ record_in(PG_FUNCTION_ARGS)
 		char	   *column_data;
 
 		/* Ignore dropped columns in datatype, but fill with nulls */
-		if (att->attisdropped)
+		if (att->attisdropped || att->attishidden)
 		{
 			values[i] = (Datum) 0;
 			nulls[i] = true;
@@ -298,6 +299,8 @@ record_in(PG_FUNCTION_ARGS)
 		goto fail;
 	}
 
+	(void) BranchInitializeTupleDescMetadata(tupdesc, values, nulls);
+
 	tuple = heap_form_tuple(tupdesc, values, nulls);
 
 	/*
@@ -405,7 +408,7 @@ record_out(PG_FUNCTION_ARGS)
 		bool		nq;
 
 		/* Ignore dropped columns in datatype */
-		if (att->attisdropped)
+		if (att->attisdropped || att->attishidden)
 			continue;
 
 		if (needComma)
@@ -549,7 +552,8 @@ record_recv(PG_FUNCTION_ARGS)
 	validcols = 0;
 	for (i = 0; i < ncolumns; i++)
 	{
-		if (!TupleDescAttr(tupdesc, i)->attisdropped)
+		if (!TupleDescAttr(tupdesc, i)->attisdropped &&
+			!TupleDescAttr(tupdesc, i)->attishidden)
 			validcols++;
 	}
 	if (usercols != validcols)
@@ -570,7 +574,7 @@ record_recv(PG_FUNCTION_ARGS)
 		StringInfo	bufptr;
 
 		/* Ignore dropped columns in datatype, but fill with nulls */
-		if (att->attisdropped)
+		if (att->attisdropped || att->attishidden)
 		{
 			values[i] = (Datum) 0;
 			nulls[i] = true;
@@ -662,6 +666,7 @@ record_recv(PG_FUNCTION_ARGS)
 		}
 	}
 
+	(void) BranchInitializeTupleDescMetadata(tupdesc, values, nulls);
 	tuple = heap_form_tuple(tupdesc, values, nulls);
 
 	/*
@@ -754,7 +759,8 @@ record_send(PG_FUNCTION_ARGS)
 	validcols = 0;
 	for (i = 0; i < ncolumns; i++)
 	{
-		if (!TupleDescAttr(tupdesc, i)->attisdropped)
+		if (!TupleDescAttr(tupdesc, i)->attisdropped &&
+			!TupleDescAttr(tupdesc, i)->attishidden)
 			validcols++;
 	}
 	pq_sendint32(&buf, validcols);
@@ -768,7 +774,7 @@ record_send(PG_FUNCTION_ARGS)
 		bytea	   *outputbytes;
 
 		/* Ignore dropped columns in datatype */
-		if (att->attisdropped)
+		if (att->attisdropped || att->attishidden)
 			continue;
 
 		pq_sendint32(&buf, column_type);
@@ -924,12 +930,16 @@ record_cmp(FunctionCallInfo fcinfo)
 		/*
 		 * Skip dropped columns
 		 */
-		if (i1 < ncolumns1 && TupleDescAttr(tupdesc1, i1)->attisdropped)
+		if (i1 < ncolumns1 &&
+			(TupleDescAttr(tupdesc1, i1)->attisdropped ||
+			 TupleDescAttr(tupdesc1, i1)->attishidden))
 		{
 			i1++;
 			continue;
 		}
-		if (i2 < ncolumns2 && TupleDescAttr(tupdesc2, i2)->attisdropped)
+		if (i2 < ncolumns2 &&
+			(TupleDescAttr(tupdesc2, i2)->attisdropped ||
+			 TupleDescAttr(tupdesc2, i2)->attishidden))
 		{
 			i2++;
 			continue;
@@ -1170,12 +1180,16 @@ record_eq(PG_FUNCTION_ARGS)
 		/*
 		 * Skip dropped columns
 		 */
-		if (i1 < ncolumns1 && TupleDescAttr(tupdesc1, i1)->attisdropped)
+		if (i1 < ncolumns1 &&
+			(TupleDescAttr(tupdesc1, i1)->attisdropped ||
+			 TupleDescAttr(tupdesc1, i1)->attishidden))
 		{
 			i1++;
 			continue;
 		}
-		if (i2 < ncolumns2 && TupleDescAttr(tupdesc2, i2)->attisdropped)
+		if (i2 < ncolumns2 &&
+			(TupleDescAttr(tupdesc2, i2)->attisdropped ||
+			 TupleDescAttr(tupdesc2, i2)->attishidden))
 		{
 			i2++;
 			continue;
@@ -1446,12 +1460,16 @@ record_image_cmp(FunctionCallInfo fcinfo)
 		/*
 		 * Skip dropped columns
 		 */
-		if (i1 < ncolumns1 && TupleDescAttr(tupdesc1, i1)->attisdropped)
+		if (i1 < ncolumns1 &&
+			(TupleDescAttr(tupdesc1, i1)->attisdropped ||
+			 TupleDescAttr(tupdesc1, i1)->attishidden))
 		{
 			i1++;
 			continue;
 		}
-		if (i2 < ncolumns2 && TupleDescAttr(tupdesc2, i2)->attisdropped)
+		if (i2 < ncolumns2 &&
+			(TupleDescAttr(tupdesc2, i2)->attisdropped ||
+			 TupleDescAttr(tupdesc2, i2)->attishidden))
 		{
 			i2++;
 			continue;
@@ -1692,12 +1710,16 @@ record_image_eq(PG_FUNCTION_ARGS)
 		/*
 		 * Skip dropped columns
 		 */
-		if (i1 < ncolumns1 && TupleDescAttr(tupdesc1, i1)->attisdropped)
+		if (i1 < ncolumns1 &&
+			(TupleDescAttr(tupdesc1, i1)->attisdropped ||
+			 TupleDescAttr(tupdesc1, i1)->attishidden))
 		{
 			i1++;
 			continue;
 		}
-		if (i2 < ncolumns2 && TupleDescAttr(tupdesc2, i2)->attisdropped)
+		if (i2 < ncolumns2 &&
+			(TupleDescAttr(tupdesc2, i2)->attisdropped ||
+			 TupleDescAttr(tupdesc2, i2)->attishidden))
 		{
 			i2++;
 			continue;
@@ -1875,7 +1897,7 @@ hash_record(PG_FUNCTION_ARGS)
 
 		att = TupleDescAttr(tupdesc, i);
 
-		if (att->attisdropped)
+		if (att->attisdropped || att->attishidden)
 			continue;
 
 		/*
@@ -1996,7 +2018,7 @@ hash_record_extended(PG_FUNCTION_ARGS)
 
 		att = TupleDescAttr(tupdesc, i);
 
-		if (att->attisdropped)
+		if (att->attisdropped || att->attishidden)
 			continue;
 
 		/*

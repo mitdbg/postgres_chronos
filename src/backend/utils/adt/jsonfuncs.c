@@ -20,6 +20,7 @@
 #include "access/tupdesc.h"
 #include "catalog/pg_proc.h"
 #include "catalog/pg_type.h"
+#include "commands/branchcmds.h"
 #include "common/int.h"
 #include "common/jsonapi.h"
 #include "common/string.h"
@@ -3588,7 +3589,7 @@ populate_record(TupleDesc tupdesc,
 		bool		found;
 
 		/* Ignore dropped columns in datatype */
-		if (att->attisdropped)
+		if (att->attisdropped || att->attishidden)
 		{
 			nulls[i] = true;
 			continue;
@@ -3619,6 +3620,7 @@ populate_record(TupleDesc tupdesc,
 										  false);
 	}
 
+	(void) BranchInitializeTupleDescMetadata(tupdesc, values, nulls);
 	res = heap_form_tuple(tupdesc, values, nulls);
 
 	pfree(values);
@@ -6106,7 +6108,7 @@ json_check_mutability(Oid typoid, bool is_jsonb, bool *has_mutable)
 		{
 			Form_pg_attribute attr = TupleDescAttr(tupdesc, i);
 
-			if (attr->attisdropped)
+			if (attr->attisdropped || attr->attishidden)
 				continue;
 
 			json_check_mutability(attr->atttypid, is_jsonb, has_mutable);

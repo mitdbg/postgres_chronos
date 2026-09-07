@@ -7450,9 +7450,11 @@ getTables(Archive *fout, int *numTables)
 						 "LEFT JOIN pg_depend d ON "
 						 "(c.relkind = " CppAsString2(RELKIND_SEQUENCE) " AND "
 						 "d.classid = 'pg_class'::regclass AND d.objid = c.oid AND "
-						 "d.objsubid = 0 AND "
-						 "d.refclassid = 'pg_class'::regclass AND d.deptype IN ('a', 'i'))\n"
-						 "LEFT JOIN pg_tablespace tsp ON (tsp.oid = c.reltablespace)\n");
+							 "d.objsubid = 0 AND "
+							 "d.refclassid = 'pg_class'::regclass AND d.deptype IN ('a', 'i'))\n"
+							 "LEFT JOIN pg_attribute da ON "
+							 "(da.attrelid = d.refobjid AND da.attnum = d.refobjsubid)\n"
+							 "LEFT JOIN pg_tablespace tsp ON (tsp.oid = c.reltablespace)\n");
 
 	/*
 	 * In 9.6 and up, left join to pg_am to pick up the amname.
@@ -7489,9 +7491,17 @@ getTables(Archive *fout, int *numTables)
 						 CppAsString2(RELKIND_COMPOSITE_TYPE) ", "
 						 CppAsString2(RELKIND_MATVIEW) ", "
 						 CppAsString2(RELKIND_FOREIGN_TABLE) ", "
-						 CppAsString2(RELKIND_PARTITIONED_TABLE) ", "
-						 CppAsString2(RELKIND_PROPGRAPH) ")\n"
-						 "ORDER BY c.oid");
+							 CppAsString2(RELKIND_PARTITIONED_TABLE) ", "
+							 CppAsString2(RELKIND_PROPGRAPH) ")\n");
+	if (fout->remoteVersion >= 90400)
+		appendPQExpBufferStr(query,
+							 "AND NOT (c.relkind = " CppAsString2(RELKIND_SEQUENCE)
+							 " AND coalesce((pg_catalog.to_jsonb(da)->>'attishidden')::pg_catalog.bool, false))\n");
+	appendPQExpBufferStr(query,
+						 "AND NOT (c.relnamespace = (SELECT oid FROM pg_catalog.pg_namespace "
+						 "WHERE nspname = 'pg_catalog') AND "
+						 "c.relname = 'pg_branch_rowid_seq')\n");
+	appendPQExpBufferStr(query, "ORDER BY c.oid");
 
 	res = ExecuteSqlQuery(fout, query->data, PGRES_TUPLES_OK);
 
@@ -8117,7 +8127,9 @@ getIndexes(Archive *fout, TableInfo tblinfo[], int numTables)
 						  "LEFT JOIN pg_catalog.pg_inherits inh "
 						  "ON (inh.inhrelid = indexrelid) "
 						  "WHERE (i.indisvalid OR t2.relkind = 'p') "
-						  "AND i.indisready "
+							  "AND i.indisready "
+							  "AND NOT EXISTS (SELECT 1 FROM pg_catalog.pg_attribute ia "
+							  "WHERE ia.attrelid = i.indexrelid AND pg_catalog.left(ia.attname, 12) = '__pg_branch_') "
 						  "ORDER BY i.indrelid, indexname",
 						  tbloids->data);
 	}
@@ -8135,7 +8147,9 @@ getIndexes(Archive *fout, TableInfo tblinfo[], int numTables)
 						  "ON (i.indrelid = c.conrelid AND "
 						  "i.indexrelid = c.conindid AND "
 						  "c.contype IN ('p','u','x')) "
-						  "WHERE i.indisvalid AND i.indisready "
+							  "WHERE i.indisvalid AND i.indisready "
+							  "AND NOT EXISTS (SELECT 1 FROM pg_catalog.pg_attribute ia "
+							  "WHERE ia.attrelid = i.indexrelid AND pg_catalog.left(ia.attname, 12) = '__pg_branch_') "
 						  "ORDER BY i.indrelid, indexname",
 						  tbloids->data);
 	}
@@ -9449,11 +9463,17 @@ getTableAttrs(Archive *fout, TableInfo *tblinfo, int numTables)
 						 "a.attnum,\n"
 						 "a.attname,\n"
 						 "a.attstattarget,\n"
-						 "a.attstorage,\n"
-						 "t.typstorage,\n"
-						 "a.atthasdef,\n"
-						 "a.attisdropped,\n"
-						 "a.attlen,\n"
+							 "a.attstorage,\n"
+							 "t.typstorage,\n"
+							 "a.atthasdef,\n");
+	if (fout->remoteVersion >= 90400)
+		appendPQExpBufferStr(q,
+							 "(a.attisdropped OR "
+							 "coalesce((pg_catalog.to_jsonb(a)->>'attishidden')::pg_catalog.bool, false)) AS attisdropped,\n");
+	else
+		appendPQExpBufferStr(q, "a.attisdropped,\n");
+	appendPQExpBufferStr(q,
+							 "a.attlen,\n"
 						 "a.attalign,\n"
 						 "a.attislocal,\n"
 						 "pg_catalog.format_type(t.oid, a.atttypmod) AS atttypname,\n"
