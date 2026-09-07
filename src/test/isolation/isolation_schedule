@@ -130,3 +130,7 @@ test: for-portion-of
 test: ddl-dependency-locking
 test: pub-concurrent-drop
 test: drop-owned-grant
+test: branch-row-lock
+test: branch-create-concurrent
+test: branch-drop-concurrent
+test: branch-private-dml

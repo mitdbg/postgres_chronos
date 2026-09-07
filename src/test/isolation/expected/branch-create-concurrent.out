@@ -1,0 +1,23 @@
+Parsed test spec with 2 sessions
+
+starting permutation: s1b s1read s2b s2read s1create s2create s1c s2c
+step s1b: BEGIN;
+step s1read: SELECT count(*) FROM branch_create_target;
+count
+-----
+    1
+(1 row)
+
+step s2b: BEGIN;
+step s2read: SELECT count(*) FROM branch_create_target;
+count
+-----
+    1
+(1 row)
+
+step s1create: CREATE BRANCH branch_left FROM main;
+step s2create: CREATE BRANCH branch_right FROM main; <waiting ...>
+step s1c: COMMIT; <waiting ...>
+step s2create: <... completed>
+step s2c: COMMIT;
+step s1c: <... completed>

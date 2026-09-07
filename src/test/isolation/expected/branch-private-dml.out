@@ -1,0 +1,18 @@
+Parsed test spec with 2 sessions
+
+starting permutation: writer_set writer_alter writer_begin writer_update create_child writer_commit child_set child_read
+step writer_set: SET BRANCH branch_private_parent;
+step writer_alter: ALTER TABLE branch_private_target ADD COLUMN local_column integer DEFAULT 1;
+step writer_begin: BEGIN;
+step writer_update: UPDATE branch_private_target SET value = 'after' WHERE id = 1;
+step create_child: CREATE BRANCH branch_private_child FROM branch_private_parent; <waiting ...>
+step writer_commit: COMMIT; <waiting ...>
+step create_child: <... completed>
+step child_set: SET BRANCH branch_private_child;
+step writer_commit: <... completed>
+step child_read: SELECT id, value, local_column FROM branch_private_target;
+id|value|local_column
+--+-----+------------
+ 1|after|           1
+(1 row)
+

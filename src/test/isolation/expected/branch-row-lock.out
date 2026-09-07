@@ -1,0 +1,99 @@
+Parsed test spec with 2 sessions
+
+starting permutation: s1createb s1create s1pub s2branch s1createc s1droppub s2branchretry s2late s1dev s1b s1u1 s2b s2u1 s1c1 s2c1 s1b2 s1u2 s2b2 s2d2 s1c2 s2c2 s1b3 s1u3 s2b3 s2skip s2share s1c3 s2c3 s2notrig s1b4 s1u4 s2b4 s2m4 s1c4 s2c4 s1b5 s1u5 s2b5 s2oc5 s1c5 s2c5 s2rows s2audit s1rows
+step s1createb: BEGIN;
+step s1create: CREATE TABLE activation_late (id integer);
+step s1pub: CREATE PUBLICATION activation_pub FOR TABLE branch_lock_target;
+step s2branch: CREATE BRANCH dev; <waiting ...>
+step s1createc: COMMIT; <waiting ...>
+step s2branch: <... completed>
+ERROR:  cannot enable native branching in a database with publications
+step s1createc: <... completed>
+step s1droppub: DROP PUBLICATION activation_pub;
+step s2branchretry: CREATE BRANCH dev;
+step s2late: SELECT count(*) AS hidden FROM pg_attribute WHERE attrelid = 'activation_late'::regclass AND attishidden;
+hidden
+------
+     5
+(1 row)
+
+step s1dev: SET BRANCH dev;
+step s1b: BEGIN;
+step s1u1: UPDATE branch_lock_target SET value = 'dev1' WHERE id = 1;
+step s2b: BEGIN;
+step s2u1: UPDATE branch_lock_target SET value = 'main1' WHERE id = 1; <waiting ...>
+step s1c1: COMMIT; <waiting ...>
+step s2u1: <... completed>
+step s2c1: COMMIT;
+step s1c1: <... completed>
+step s1b2: BEGIN;
+step s1u2: UPDATE branch_lock_target SET value = 'dev2' WHERE id = 2;
+step s2b2: BEGIN;
+step s2d2: DELETE FROM branch_lock_target WHERE id = 2; <waiting ...>
+step s1c2: COMMIT; <waiting ...>
+step s2d2: <... completed>
+step s2c2: COMMIT;
+step s1c2: <... completed>
+step s1b3: BEGIN;
+step s1u3: UPDATE branch_lock_target SET value = 'dev3' WHERE id = 3;
+step s2b3: BEGIN;
+step s2skip: SELECT value FROM branch_lock_target WHERE id = 3 FOR UPDATE SKIP LOCKED;
+value
+-----
+(0 rows)
+
+step s2share: SELECT value FROM branch_lock_target WHERE id = 3 FOR KEY SHARE; <waiting ...>
+step s1c3: COMMIT; <waiting ...>
+step s2share: <... completed>
+value
+-----
+base3
+(1 row)
+
+step s2c3: COMMIT;
+step s1c3: <... completed>
+step s2notrig: DROP TRIGGER branch_lock_before_update ON branch_lock_target;
+step s1b4: BEGIN;
+step s1u4: UPDATE branch_lock_target SET value = 'dev4' WHERE id = 4;
+step s2b4: BEGIN;
+step s2m4: MERGE INTO branch_lock_target t
+            USING (VALUES (4, 'main4')) s(id, value) ON t.id = s.id
+            WHEN MATCHED THEN UPDATE SET value = s.value; <waiting ...>
+step s1c4: COMMIT; <waiting ...>
+step s2m4: <... completed>
+step s2c4: COMMIT;
+step s1c4: <... completed>
+step s1b5: BEGIN;
+step s1u5: UPDATE branch_lock_target SET value = 'dev5' WHERE id = 5;
+step s2b5: BEGIN;
+step s2oc5: INSERT INTO branch_lock_target VALUES (5, 'main5')
+             ON CONFLICT (id) DO UPDATE SET value = excluded.value; <waiting ...>
+step s1c5: COMMIT; <waiting ...>
+step s2oc5: <... completed>
+step s2c5: COMMIT;
+step s1c5: <... completed>
+step s2rows: SELECT * FROM branch_lock_target ORDER BY id;
+id|value      
+--+-----------
+ 1|base1>main1
+ 3|base3      
+ 4|main4      
+ 5|main5      
+(4 rows)
+
+step s2audit: SELECT * FROM branch_lock_audit ORDER BY event, old_value;
+event |old_value
+------+---------
+DELETE|base2    
+(1 row)
+
+step s1rows: SELECT * FROM branch_lock_target ORDER BY id;
+id|value     
+--+----------
+ 1|base1>dev1
+ 2|base2>dev2
+ 3|base3>dev3
+ 4|dev4      
+ 5|dev5      
+(5 rows)
+

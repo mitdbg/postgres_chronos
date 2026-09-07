@@ -1,0 +1,19 @@
+Parsed test spec with 3 sessions
+
+starting permutation: left_set left_alter left_main right_set right_alter right_main blocker_begin blocker_read drop_left drop_right blocker_commit
+step left_set: SET BRANCH drop_leaf_left;
+step left_alter: ALTER TABLE branch_drop_target ADD COLUMN left_value integer;
+step left_main: SET BRANCH main;
+step right_set: SET BRANCH drop_leaf_right;
+step right_alter: ALTER TABLE branch_drop_target ADD COLUMN right_value integer;
+step right_main: SET BRANCH main;
+step blocker_begin: BEGIN;
+step blocker_read: SELECT count(*) FROM branch_drop_target;
+count
+-----
+    1
+(1 row)
+
+step drop_left: DROP BRANCH drop_leaf_left;
+step drop_right: DROP BRANCH drop_leaf_right;
+step blocker_commit: COMMIT;
