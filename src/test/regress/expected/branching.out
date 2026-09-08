@@ -19,6 +19,17 @@ SELECT (ROW(3, 'three@example.test', 30)::accounts).email
  three@example.test
 (1 row)
 
+CREATE FUNCTION make_account(integer, text, integer) RETURNS accounts
+LANGUAGE SQL IMMUTABLE
+AS 'SELECT $1, $2, $3';
+SELECT (make_account(4, 'four@example.test', 40)).email
+       AS function_result_hides_metadata;
+ function_result_hides_metadata 
+--------------------------------
+ four@example.test
+(1 row)
+
+DROP FUNCTION make_account(integer, text, integer);
 CREATE TABLE parent_fk (id integer PRIMARY KEY);
 CREATE TABLE child_fk
 (

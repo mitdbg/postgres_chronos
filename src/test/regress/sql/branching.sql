@@ -15,6 +15,12 @@ INSERT INTO accounts VALUES
     (2, 'two@example.test', 20);
 SELECT (ROW(3, 'three@example.test', 30)::accounts).email
        AS record_cast_hides_metadata;
+CREATE FUNCTION make_account(integer, text, integer) RETURNS accounts
+LANGUAGE SQL IMMUTABLE
+AS 'SELECT $1, $2, $3';
+SELECT (make_account(4, 'four@example.test', 40)).email
+       AS function_result_hides_metadata;
+DROP FUNCTION make_account(integer, text, integer);
 
 CREATE TABLE parent_fk (id integer PRIMARY KEY);
 CREATE TABLE child_fk

@@ -130,8 +130,8 @@ ExecInitJunkFilter(List *targetList, TupleTableSlot *slot)
  *
  * Here, we are given the target "clean" tuple descriptor rather than
  * inferring it from the targetlist.  The target descriptor can contain
- * deleted columns.  It is assumed that the caller has checked that the
- * non-deleted columns match up with the non-junk columns of the targetlist.
+ * deleted or hidden columns.  It is assumed that the caller has checked that
+ * the user-visible columns match the non-junk columns of the targetlist.
  */
 JunkFilter *
 ExecInitJunkFilterConversion(List *targetList,
@@ -159,8 +159,8 @@ ExecInitJunkFilterConversion(List *targetList,
 	 * The "map" is an array of "cleanLength" attribute numbers, i.e. one
 	 * entry for every attribute of the "clean" tuple. The value of this entry
 	 * is the attribute number of the corresponding attribute of the
-	 * "original" tuple.  We store zero for any deleted attributes, marking
-	 * that a NULL is needed in the output tuple.
+	 * "original" tuple.  We store zero for any physical-only attributes,
+	 * marking that a NULL is needed in the output tuple.
 	 */
 	cleanLength = cleanTupType->natts;
 	if (cleanLength > 0)
@@ -169,7 +169,8 @@ ExecInitJunkFilterConversion(List *targetList,
 		t = list_head(targetList);
 		for (i = 0; i < cleanLength; i++)
 		{
-			if (TupleDescCompactAttr(cleanTupType, i)->attisdropped)
+			if (TupleDescAttr(cleanTupType, i)->attisdropped ||
+				TupleDescAttr(cleanTupType, i)->attishidden)
 				continue;		/* map entry is already zero */
 			for (;;)
 			{

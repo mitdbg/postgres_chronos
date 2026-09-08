@@ -2342,8 +2342,8 @@ check_sql_stmt_retval(List *queryTreeList,
 		/*
 		 * Verify that the targetlist matches the return tuple type.  We scan
 		 * the non-resjunk columns, and coerce them if necessary to match the
-		 * datatypes of the non-deleted attributes.  For deleted attributes,
-		 * insert NULL result columns if the caller asked for that.
+		 * datatypes of the user-visible attributes.  For physical-only
+		 * attributes, insert NULL result columns if the caller asked for that.
 		 */
 		tupnatts = rettupdesc->natts;
 		tuplogcols = 0;			/* we'll count nondeleted cols as we go */
@@ -2368,18 +2368,18 @@ check_sql_stmt_retval(List *queryTreeList,
 									format_type_be(rettype)),
 							 errdetail("Final statement returns too many columns.")));
 				attr = TupleDescAttr(rettupdesc, colindex - 1);
-				if (attr->attisdropped && insertDroppedCols)
+				if ((attr->attisdropped || attr->attishidden) &&
+					insertDroppedCols)
 				{
 					Expr	   *null_expr;
 
-					/* The type of the null we insert isn't important */
-					null_expr = (Expr *) makeConst(INT4OID,
-												   -1,
-												   InvalidOid,
-												   sizeof(int32),
-												   (Datum) 0,
-												   true,	/* isnull */
-												   true /* byval */ );
+					if (attr->attisdropped)
+						null_expr = (Expr *) makeNullConst(INT4OID, -1,
+													 InvalidOid);
+					else
+						null_expr = (Expr *) makeNullConst(attr->atttypid,
+													 attr->atttypmod,
+													 attr->attcollation);
 					upper_tlist = lappend(upper_tlist,
 										  makeTargetEntry(null_expr,
 														  list_length(upper_tlist) + 1,
@@ -2387,7 +2387,7 @@ check_sql_stmt_retval(List *queryTreeList,
 														  false));
 					upper_tlist_nontrivial = true;
 				}
-			} while (attr->attisdropped);
+			} while (attr->attisdropped || attr->attishidden);
 			tuplogcols++;
 
 			if (!coerce_fn_result_column(tle,
@@ -2405,10 +2405,12 @@ check_sql_stmt_retval(List *queryTreeList,
 								   tuplogcols)));
 		}
 
-		/* remaining columns in rettupdesc had better all be dropped */
+		/* Remaining columns must all be physical-only attributes. */
 		for (colindex++; colindex <= tupnatts; colindex++)
 		{
-			if (!TupleDescCompactAttr(rettupdesc, colindex - 1)->attisdropped)
+			Form_pg_attribute attr = TupleDescAttr(rettupdesc, colindex - 1);
+
+			if (!attr->attisdropped && !attr->attishidden)
 				ereport(ERROR,
 						(errcode(ERRCODE_INVALID_FUNCTION_DEFINITION),
 						 errmsg("return type mismatch in function declared to return %s",
@@ -2418,14 +2420,13 @@ check_sql_stmt_retval(List *queryTreeList,
 			{
 				Expr	   *null_expr;
 
-				/* The type of the null we insert isn't important */
-				null_expr = (Expr *) makeConst(INT4OID,
-											   -1,
-											   InvalidOid,
-											   sizeof(int32),
-											   (Datum) 0,
-											   true,	/* isnull */
-											   true /* byval */ );
+				if (attr->attisdropped)
+					null_expr = (Expr *) makeNullConst(INT4OID, -1,
+												 InvalidOid);
+				else
+					null_expr = (Expr *) makeNullConst(attr->atttypid,
+												 attr->atttypmod,
+												 attr->attcollation);
 				upper_tlist = lappend(upper_tlist,
 									  makeTargetEntry(null_expr,
 													  list_length(upper_tlist) + 1,
