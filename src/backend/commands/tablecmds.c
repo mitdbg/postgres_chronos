@@ -18977,7 +18977,7 @@ ATExecAddOf(Relation rel, const TypeName *ofTypename, LOCKMODE lockmode)
 			continue;
 		type_attname = NameStr(type_attr->attname);
 
-		/* Get the next non-dropped table attribute. */
+		/* Get the next user-visible table attribute. */
 		do
 		{
 			if (table_attno > tableTupleDesc->natts)
@@ -18987,7 +18987,7 @@ ATExecAddOf(Relation rel, const TypeName *ofTypename, LOCKMODE lockmode)
 								type_attname)));
 			table_attr = TupleDescAttr(tableTupleDesc, table_attno - 1);
 			table_attno++;
-		} while (table_attr->attisdropped);
+		} while (table_attr->attisdropped || table_attr->attishidden);
 		table_attname = NameStr(table_attr->attname);
 
 		/* Compare name. */
@@ -19008,13 +19008,13 @@ ATExecAddOf(Relation rel, const TypeName *ofTypename, LOCKMODE lockmode)
 	}
 	ReleaseTupleDesc(typeTupleDesc);
 
-	/* Any remaining columns at the end of the table had better be dropped. */
+	/* Any remaining columns must be dropped or internal storage columns. */
 	for (; table_attno <= tableTupleDesc->natts; table_attno++)
 	{
 		Form_pg_attribute table_attr = TupleDescAttr(tableTupleDesc,
 													 table_attno - 1);
 
-		if (!table_attr->attisdropped)
+		if (!table_attr->attisdropped && !table_attr->attishidden)
 			ereport(ERROR,
 					(errcode(ERRCODE_DATATYPE_MISMATCH),
 					 errmsg("table has extra column \"%s\"",

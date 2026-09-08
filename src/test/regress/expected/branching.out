@@ -168,6 +168,12 @@ SELECT branch_acl_row FROM branch_acl_row;
 RESET ROLE;
 DROP TABLE branch_acl_row;
 DROP ROLE branch_column_reader;
+CREATE TYPE branch_typed_row AS (id integer, value text);
+CREATE TABLE branch_typed_table (id integer, value text);
+ALTER TABLE branch_typed_table OF branch_typed_row;
+ALTER TABLE branch_typed_table NOT OF;
+DROP TABLE branch_typed_table;
+DROP TYPE branch_typed_row;
 CREATE TABLE parent_fk (id integer PRIMARY KEY);
 CREATE TABLE child_fk
 (
