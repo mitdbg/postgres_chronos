@@ -48,6 +48,11 @@ CREATE TABLE schema_copy_target
 CREATE INDEX schema_copy_target_value_idx ON schema_copy_target (value);
 INSERT INTO schema_copy_target VALUES (1, 'one'), (2, 'two');
 CREATE VIEW account_view AS SELECT id, email, balance FROM accounts;
+CREATE VIEW account_join_view AS
+    SELECT a.id, a.email
+    FROM accounts a JOIN parent_fk p USING (id);
+SELECT pg_get_viewdef('account_join_view'::regclass, true)
+       !~ '__pg_branch_' AS view_hides_metadata;
 CREATE TABLE generated_target
 (
     id integer PRIMARY KEY,

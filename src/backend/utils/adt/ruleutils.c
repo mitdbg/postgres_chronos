@@ -385,13 +385,15 @@ static void set_rtable_names(deparse_namespace *dpns, List *parent_namespaces,
 							 Bitmapset *rels_used);
 static void set_deparse_for_query(deparse_namespace *dpns, Query *query,
 								  List *parent_namespaces);
-static void set_simple_column_names(deparse_namespace *dpns);
+static void set_simple_column_names(deparse_namespace *dpns,
+								bool include_hidden);
 static bool has_dangerous_join_using(deparse_namespace *dpns, Node *jtnode);
 static void set_using_names(deparse_namespace *dpns, Node *jtnode,
 							List *parentUsing);
 static void set_relation_column_names(deparse_namespace *dpns,
 									  RangeTblEntry *rte,
-									  deparse_columns *colinfo);
+									  deparse_columns *colinfo,
+									  bool include_hidden);
 static void set_join_column_names(deparse_namespace *dpns, RangeTblEntry *rte,
 								  deparse_columns *colinfo);
 static bool colname_is_unique(const char *colname, deparse_namespace *dpns,
@@ -1116,7 +1118,7 @@ pg_get_triggerdef_worker(Oid trigid, bool pretty)
 		dpns.ctes = NIL;
 		dpns.appendrels = NULL;
 		set_rtable_names(&dpns, NIL, NULL);
-		set_simple_column_names(&dpns);
+		set_simple_column_names(&dpns, true);
 
 		/* Set up context with one-deep namespace stack */
 		context.buf = &buf;
@@ -4095,7 +4097,7 @@ deparse_context_for(const char *aliasname, Oid relid)
 	dpns->ctes = NIL;
 	dpns->appendrels = NULL;
 	set_rtable_names(dpns, NIL, NULL);
-	set_simple_column_names(dpns);
+	set_simple_column_names(dpns, true);
 
 	/* Return a one-deep namespace stack */
 	return list_make1(dpns);
@@ -4151,7 +4153,7 @@ deparse_context_for_plan_tree(PlannedStmt *pstmt, List *rtable_names)
 	 * Set up column name aliases, ignoring any join RTEs; they don't matter
 	 * because plan trees don't contain any join alias Vars.
 	 */
-	set_simple_column_names(dpns);
+	set_simple_column_names(dpns, true);
 
 	/* Return a one-deep namespace stack */
 	return list_make1(dpns);
@@ -4445,7 +4447,7 @@ set_deparse_for_query(deparse_namespace *dpns, Query *query,
 		if (rte->rtekind == RTE_JOIN)
 			set_join_column_names(dpns, rte, colinfo);
 		else
-			set_relation_column_names(dpns, rte, colinfo);
+			set_relation_column_names(dpns, rte, colinfo, false);
 	}
 }
 
@@ -4460,7 +4462,7 @@ set_deparse_for_query(deparse_namespace *dpns, Query *query,
  * error out cleanly because the struct's num_cols will be zero.
  */
 static void
-set_simple_column_names(deparse_namespace *dpns)
+set_simple_column_names(deparse_namespace *dpns, bool include_hidden)
 {
 	ListCell   *lc;
 	ListCell   *lc2;
@@ -4478,7 +4480,7 @@ set_simple_column_names(deparse_namespace *dpns)
 		deparse_columns *colinfo = (deparse_columns *) lfirst(lc2);
 
 		if (rte->rtekind != RTE_JOIN)
-			set_relation_column_names(dpns, rte, colinfo);
+			set_relation_column_names(dpns, rte, colinfo, include_hidden);
 	}
 }
 
@@ -4738,7 +4740,7 @@ set_using_names(deparse_namespace *dpns, Node *jtnode, List *parentUsing)
  */
 static void
 set_relation_column_names(deparse_namespace *dpns, RangeTblEntry *rte,
-						  deparse_columns *colinfo)
+						  deparse_columns *colinfo, bool include_hidden)
 {
 	int			ncolumns;
 	char	  **real_colnames;
@@ -4768,7 +4770,8 @@ set_relation_column_names(deparse_namespace *dpns, RangeTblEntry *rte,
 		{
 			Form_pg_attribute attr = TupleDescAttr(tupdesc, i);
 
-			if (attr->attisdropped)
+			if (attr->attisdropped ||
+				(!include_hidden && attr->attishidden))
 				real_colnames[i] = NULL;
 			else
 				real_colnames[i] = pstrdup(NameStr(attr->attname));
