@@ -859,7 +859,7 @@ insert_property_records(Oid graphid, Oid ellabeloid, Oid pgerelid, const PropGra
 			ColumnRef  *cr;
 			ResTarget  *rt;
 
-			if (att->attnum <= 0 || att->attisdropped)
+			if (att->attnum <= 0 || att->attisdropped || att->attishidden)
 				continue;
 
 			cr = makeNode(ColumnRef);

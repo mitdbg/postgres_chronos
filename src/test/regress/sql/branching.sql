@@ -92,6 +92,13 @@ INSERT INTO branch_private_truncate VALUES (-1);
 SELECT * FROM branch_private_truncate;
 DROP TABLE branch_private_truncate;
 
+CREATE TABLE branch_graph_vertex (id integer PRIMARY KEY, label text);
+CREATE PROPERTY GRAPH branch_property_graph
+    VERTEX TABLES
+    (branch_graph_vertex KEY (id) PROPERTIES ALL COLUMNS);
+DROP PROPERTY GRAPH branch_property_graph;
+DROP TABLE branch_graph_vertex;
+
 CREATE TABLE parent_fk (id integer PRIMARY KEY);
 CREATE TABLE child_fk
 (
