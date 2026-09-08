@@ -138,6 +138,7 @@ static void branch_add_storage_index(Oid relid, const char *first,
 #define MAIN_BRANCH_OID 9100
 #define ROOT_BRANCH_SEGMENT_OID 9101
 #define BRANCH_SCHEMA_COPY_BATCH_SIZE 1000
+#define BRANCH_DDL_LOCK_SUBID 3
 
 typedef struct BranchPendingIndexWorker
 {
@@ -1125,9 +1126,7 @@ BranchPrepareAlterTable(AlterTableStmt *stmt, LOCKMODE lockmode)
 		!BranchDatabaseIsEnabled())
 		return;
 
-	/* Serialize with writers/forks, but allow readers of the branch. */
-	BranchAcquireLock(ShareRowExclusiveLock);
-	/* The shared predecessor only needs to remain schema-stable while copied. */
+	/* The predecessor only needs to remain schema-stable while inspected. */
 	sourcerelid = RangeVarGetRelid(stmt->relation, AccessShareLock, false);
 	logicalrelid = BranchLogicalRelationOid(sourcerelid);
 	sourcerel = relation_open(sourcerelid, NoLock);
@@ -1144,9 +1143,19 @@ BranchPrepareAlterTable(AlterTableStmt *stmt, LOCKMODE lockmode)
 					   RelationGetRelationName(sourcerel));
 	relation_close(sourcerel, NoLock);
 
+	/*
+	 * Serialize branch-local DDL upgrades independently of writers.  The
+	 * writer-compatible branch lock prevents a fork while private DDL runs.
+	 * Only a real schema copy upgrades the branch lock and waits for writers.
+	 */
+	BranchEnsureSession();
+	LockDatabaseObject(BranchRelationId, MyBranchId,
+					   BRANCH_DDL_LOCK_SUBID, ExclusiveLock);
+	BranchAcquireLock(RowExclusiveLock);
 	branch_ensure_indexes_ready(sourcerelid);
 	if (branch_physical_version_is_private(logicalrelid, sourcerelid))
 		return;
+	BranchAcquireLock(ShareRowExclusiveLock);
 
 	versionrel = table_open(BranchRelVersionRelationId, RowExclusiveLock);
 	versionid = GetNewOidWithIndex(versionrel, BranchRelVersionOidIndexId,

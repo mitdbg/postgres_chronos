@@ -1,6 +1,11 @@
 Parsed test spec with 2 sessions
 
-starting permutation: writer_set writer_alter writer_begin writer_update create_child writer_commit child_set child_read
+starting permutation: writer_main_begin writer_main_update alter_unrelated writer_main_commit create_parent writer_set writer_alter writer_begin writer_update create_child writer_commit child_set child_read
+step writer_main_begin: BEGIN;
+step writer_main_update: UPDATE branch_private_target SET value = value WHERE id = 1;
+step alter_unrelated: ALTER TABLE branch_private_ddl_target ADD COLUMN value integer;
+step writer_main_commit: COMMIT;
+step create_parent: CREATE BRANCH branch_private_parent FROM main;
 step writer_set: SET BRANCH branch_private_parent;
 step writer_alter: ALTER TABLE branch_private_target ADD COLUMN local_column integer DEFAULT 1;
 step writer_begin: BEGIN;
