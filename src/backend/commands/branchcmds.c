@@ -2718,15 +2718,10 @@ branch_add_storage_index(Oid relid, const char *first, const char *second)
 }
 
 /*
- * A normal database remains byte-for-byte ordinary PostgreSQL until its
- * first fork.  Activation transactionally upgrades every permanent or
- * unlogged user table, including existing data, before the branch interval
- * is split.
- */
-/*
  * Give main a fresh head with the same interval.  This records activation
- * without consuming any branch-coordinate space, so the expensive table
- * conversion can be performed during untimed setup before the first fork.
+ * without consuming any branch-coordinate space.  Freshly initialized
+ * databases are already active; this conversion path remains for databases
+ * whose catalog still uses the root segment as the main head.
  */
 static void
 branch_mark_database_enabled(void)

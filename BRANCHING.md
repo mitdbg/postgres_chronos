@@ -31,23 +31,15 @@ export CHRONOS_PG_PORT=55490
 Each PostgreSQL database manages its own branches. Creating a branch in
 `branch_demo` has no effect on another database in the same cluster.
 
-## 2. Enable branching
+## 2. Create data on `main`
 
-Enable branching explicitly before loading or timing a workload.
+Branching is enabled in every new database. Permanent and unlogged user tables
+receive the required record metadata and internal indexes when they are
+created. Temporary tables do not participate in branching.
 
-~~~sql
-SELECT pg_catalog.pg_branch_enable();
-~~~
-
-The first call returns `true`, and later calls return `false`. The first
-`CREATE BRANCH` also enables the database automatically, but an explicit call
-makes the conversion cost easier to control. On a database that already
-contains tables, activation takes exclusive table locks while adding record
-metadata and internal indexes.
-
-Tables created after activation receive the required metadata automatically.
-Permanent and unlogged user tables participate in branching. Temporary tables
-do not.
+`pg_branch_enable()` remains available for databases initialized by an older
+development build. It returns `false` in a new database because no conversion
+is necessary.
 
 Create a table and initial data on the default `main` branch.
 
@@ -264,9 +256,8 @@ Configure `max_worker_processes` with room for these workers. A copied table
 remains queryable if a secondary-index worker cannot start, although queries
 may use sequential scans until those indexes are built.
 
-PostgreSQL publications are incompatible with an activated database because
-logical decoding would expose physical interval records. Drop publications
-before enabling branching.
+PostgreSQL publications are not supported because logical decoding would
+expose physical interval records. `CREATE PUBLICATION` is rejected.
 
 Sequences are shared across branches. Switching or deleting a branch does not
 restore sequence values. This includes serial and identity sequences.
@@ -275,7 +266,7 @@ restore sequence values. This includes serial and identity sequences.
 
 | Command | Behavior |
 | --- | --- |
-| `SELECT pg_branch_enable()` | Converts the current database and returns whether conversion occurred |
+| `SELECT pg_branch_enable()` | Converts a catalog created by an older development build and returns whether conversion occurred; returns `false` for a new database |
 | `CREATE BRANCH child FROM source` | Creates a branch from an explicit source |
 | `CREATE BRANCH child` | Creates a branch from the session's current branch |
 | `SET BRANCH name` | Selects a branch for the session |
@@ -293,7 +284,7 @@ deletion.
 | `branch cannot be changed inside a transaction block` | Finish the transaction, select the branch, and begin a new transaction |
 | `cannot drop the current branch` | Select `main` or another branch before deletion |
 | `branch has child branches` | Delete the children first or use `CASCADE` |
-| Branching cannot be enabled while publications exist | Drop the publications before activation |
+| Publications are rejected | Logical replication is not supported in a branching database |
 | `could not start background index builder` | Increase `max_worker_processes`; the table remains available without the pending secondary indexes |
 | `branch interval is exhausted` | Create a new branch from an ancestor with available interval space and review the fanout hint |
 

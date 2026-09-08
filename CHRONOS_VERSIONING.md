@@ -158,25 +158,23 @@ path.
 
 ## 2. PostgreSQL integration
 
-### 2.1 Activation and catalogs
+### 2.1 Database initialization and catalogs
 
-`pg_branch_enable()` converts a database before its first fork. The call is
-idempotent, and `CREATE BRANCH` invokes it automatically when needed.
-Activation finds permanent and unlogged user tables, orders them by OID, and
-takes `AccessExclusiveLock` on all of them before changing any relation. It
-adds the five hidden attributes and two internal btree indexes.
+`initdb` enables branching in every new database. Permanent and unlogged user
+tables receive five hidden attributes and two internal btree indexes during
+`CREATE TABLE`.
 
 ~~~text
 (__pg_branch_rowid, __pg_branch_low)     tuple relocation
 (__pg_branch_writer, __pg_branch_rowid)  branch deletion
 ~~~
 
-The activation locks remain until commit, so another session observes either
-the original database or the fully converted database. Conversion can rewrite
-and index existing data. Experiments should perform it during setup. Table
-creation takes a shared activation lock, and permanent or unlogged tables
-created after activation receive the metadata and indexes directly. Temporary
-tables remain unversioned.
+`pg_branch_enable()` remains as an idempotent conversion function for catalogs
+created by older development builds. Conversion orders existing tables by OID,
+takes `AccessExclusiveLock` on them, and adds the same attributes and indexes.
+The locks remain until commit, so another session observes either the original
+database or the fully converted database. Temporary tables remain
+unversioned.
 
 The patch stores branch state in three database-local, WAL-logged catalogs.
 
@@ -186,8 +184,9 @@ The patch stores branch state in three database-local, WAL-logged catalogs.
 | `pg_branch_segment` | Segment ancestry, interval, read point, depth, child count, and mutable or retired state |
 | `pg_branch_relversion` | Logical and physical relation OIDs, source relation, owning branch, interval, and secondary-index state |
 
-`initdb` creates `main` with OID 9100 and a root segment with OID 9101.
-Activation replaces the root with a mutable segment over the same interval,
+`initdb` creates `main` with OID 9100, a retired root segment with OID 9101,
+and a mutable full-range segment with OID 9102. The compatibility conversion
+replaces an older catalog's mutable root with a segment over the same interval,
 which records that the database has been converted without consuming interval
 space.
 
@@ -240,8 +239,8 @@ validate SQL uniqueness. Reindex performs the same validation.
 
 Exclusion checks filter the candidate and conflicting tuple at the same branch
 point. Index construction validates exclusion constraints once per active
-point. Foreign-key checks use PostgreSQL's SPI path after activation because
-the direct RI index probe bypasses query rewrite.
+point. Foreign-key checks use PostgreSQL's SPI path in branching databases
+because the direct RI index probe bypasses query rewrite.
 
 ### 2.5 Branch-local ALTER TABLE
 
@@ -294,7 +293,7 @@ rewrite, executor, table access, and index enforcement boundaries.
 
 | Component | Files and changes |
 | --- | --- |
-| Core branch code | [branchcmds.c](src/backend/commands/branchcmds.c) and [branchcmds.h](src/include/commands/branchcmds.h) implement activation, allocation, locking, interval writes, schema copies, and deletion |
+| Core branch code | [branchcmds.c](src/backend/commands/branchcmds.c) and [branchcmds.h](src/include/commands/branchcmds.h) implement catalog conversion, allocation, locking, interval writes, schema copies, and deletion |
 | Coordinate type | [branchcoord.c](src/backend/utils/adt/branchcoord.c), [branchcoord.h](src/include/utils/branchcoord.h), and the type, procedure, operator, and opclass catalog data add `pg_branch_coord` |
 | Catalogs | [pg_branch.h](src/include/catalog/pg_branch.h), [pg_branch_segment.h](src/include/catalog/pg_branch_segment.h), [pg_branch_relversion.h](src/include/catalog/pg_branch_relversion.h), their data files, `Catalog.pm`, and bootstrap code add branch metadata |
 | SQL interface | `gram.y`, `parsenodes.h`, `kwlist.h`, `cmdtaglist.h`, and `utility.c` add CREATE and DROP BRANCH and prepare ALTER TABLE |
@@ -332,7 +331,7 @@ export CHRONOS_PG_PORT=55490
 
 ### 4.2 Create and use a branch
 
-Create the table and activate branching before timed work.
+Create the table on `main`.
 
 ~~~sql
 CREATE TABLE accounts (
@@ -343,12 +342,11 @@ CREATE TABLE accounts (
 
 INSERT INTO accounts VALUES (1, 100, 'open');
 
-SELECT pg_catalog.pg_branch_enable();
 SHOW BRANCH;
 ~~~
 
-The first activation returns `true`. Later calls return `false`. Create a
-branch and modify it with ordinary DML.
+Create a branch and modify it with ordinary DML. In a new database,
+`pg_branch_enable()` returns `false` because branching is already enabled.
 
 ~~~sql
 CREATE BRANCH dev FROM main;
@@ -554,15 +552,16 @@ policy. The catalogs contain a terminal-branch kind, but SQL cannot set it.
 
 `pg_branch.browner` records the creator without defining a separate branch
 ACL. Any role with database `CONNECT` can select a branch, and database
-`CREATE` controls activation, creation, and deletion. Hidden attributes
+`CREATE` controls branch creation, deletion, and legacy catalog conversion.
+Hidden attributes
 protect the SQL interface but do not form a security boundary against
 superusers or direct catalog inspection.
 
 ## 6. Tests
 
 [branching.sql](src/test/regress/sql/branching.sql) covers interval reads and
-writes, nested and high-fanout creation, activation, schema copying, private
-DML, COPY, CTAS, TRUNCATE, MERGE, constraints, and hidden attributes. The
+writes, nested and high-fanout creation, default initialization, schema
+copying, private DML, COPY, CTAS, TRUNCATE, MERGE, constraints, and hidden attributes. The
 isolation suite exercises concurrent creation, deletion, private DML, and
 logical-record locks in [src/test/isolation/specs](src/test/isolation/specs).
 

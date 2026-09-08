@@ -39,9 +39,7 @@ teardown
 session s1
 step s1createb { BEGIN; }
 step s1create { CREATE TABLE activation_late (id integer); }
-step s1pub { CREATE PUBLICATION activation_pub FOR TABLE branch_lock_target; }
 step s1createc { COMMIT; }
-step s1droppub { DROP PUBLICATION activation_pub; }
 step s1dev { SET BRANCH dev; }
 step s1b { BEGIN; }
 step s1u1 { UPDATE branch_lock_target SET value = 'dev1' WHERE id = 1; }
@@ -62,7 +60,6 @@ step s1rows { SELECT * FROM branch_lock_target ORDER BY id; }
 
 session s2
 step s2branch { CREATE BRANCH dev; }
-step s2branchretry { CREATE BRANCH dev; }
 step s2late { SELECT count(*) AS hidden FROM pg_attribute WHERE attrelid = 'activation_late'::regclass AND attishidden; }
 step s2b { BEGIN; }
 step s2u1 { UPDATE branch_lock_target SET value = 'main1' WHERE id = 1; }
@@ -87,4 +84,4 @@ step s2c5 { COMMIT; }
 step s2rows { SELECT * FROM branch_lock_target ORDER BY id; }
 step s2audit { SELECT * FROM branch_lock_audit ORDER BY event, old_value; }
 
-permutation s1createb s1create s1pub s2branch s1createc(s2branch) s1droppub s2branchretry s2late s1dev s1b s1u1 s2b s2u1 s1c1(s2u1) s2c1 s1b2 s1u2 s2b2 s2d2 s1c2(s2d2) s2c2 s1b3 s1u3 s2b3 s2skip s2share s1c3(s2share) s2c3 s2notrig s1b4 s1u4 s2b4 s2m4 s1c4(s2m4) s2c4 s1b5 s1u5 s2b5 s2oc5 s1c5(s2oc5) s2c5 s2rows s2audit s1rows
+permutation s1createb s1create s1createc s2branch s2late s1dev s1b s1u1 s2b s2u1 s1c1(s2u1) s2c1 s1b2 s1u2 s2b2 s2d2 s1c2(s2d2) s2c2 s1b3 s1u3 s2b3 s2skip s2share s1c3(s2share) s2c3 s2notrig s1b4 s1u4 s2b4 s2m4 s1c4(s2m4) s2c4 s1b5 s1u5 s2b5 s2oc5 s1c5(s2oc5) s2c5 s2rows s2audit s1rows

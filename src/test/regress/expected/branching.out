@@ -177,14 +177,9 @@ WHERE attrelid IN ('accounts'::regclass,
   AND attishidden;
  hidden_before 
 ---------------
-             0
+            30
 (1 row)
 
-CREATE PUBLICATION branch_pub FOR TABLE accounts;
-CREATE BRANCH blocked_by_publication;
-ERROR:  cannot enable native branching in a database with publications
-HINT:  Drop the publications before creating the first branch.
-DROP PUBLICATION branch_pub;
 CREATE BRANCH dev;
 CREATE PUBLICATION branch_pub FOR TABLE accounts;
 ERROR:  cannot create a publication in a database with native branching enabled
@@ -868,7 +863,7 @@ JOIN pg_branch b ON b.oid = rv.brvbranch
 WHERE b.brstate = 'a';
  active_physical_schema_versions 
 ---------------------------------
-                               0
+                               2
 (1 row)
 
 SELECT * FROM accounts ORDER BY id;
@@ -888,20 +883,22 @@ SELECT pg_sleep(1);
 
 \connect regression
 DROP DATABASE regression_branching;
--- Explicit activation performs the database conversion without consuming a
--- child branch or interval space and is idempotent for benchmark setup.
-CREATE DATABASE regression_branch_enable;
-\connect regression_branch_enable
+-- New databases start with branching enabled.  The compatibility function is
+-- therefore a no-op, and tables created before its call are already versioned.
+CREATE DATABASE regression_branch_default;
+\connect regression_branch_default
 CREATE TABLE activation_target (id integer PRIMARY KEY, value text);
 INSERT INTO activation_target VALUES (1, 'main');
-SELECT pg_branch_enable() AS first_activation;
- first_activation 
-------------------
- t
+SELECT count(*) AS hidden_by_default
+FROM pg_attribute
+WHERE attrelid = 'activation_target'::regclass AND attishidden;
+ hidden_by_default 
+-------------------
+                 5
 (1 row)
 
-SELECT pg_branch_enable() AS second_activation;
- second_activation 
+SELECT pg_branch_enable() AS activation_needed;
+ activation_needed 
 -------------------
  f
 (1 row)
@@ -921,4 +918,4 @@ SELECT * FROM activation_target;
 (1 row)
 
 \connect regression
-DROP DATABASE regression_branch_enable;
+DROP DATABASE regression_branch_default;

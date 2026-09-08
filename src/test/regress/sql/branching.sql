@@ -189,9 +189,6 @@ WHERE attrelid IN ('accounts'::regclass,
                    'measurements_high'::regclass)
   AND attishidden;
 
-CREATE PUBLICATION branch_pub FOR TABLE accounts;
-CREATE BRANCH blocked_by_publication;
-DROP PUBLICATION branch_pub;
 CREATE BRANCH dev;
 CREATE PUBLICATION branch_pub FOR TABLE accounts;
 INSERT INTO accounts VALUES (6, 'main-after-fork@example.test', 60);
@@ -491,17 +488,19 @@ SELECT pg_sleep(1);
 \connect regression
 DROP DATABASE regression_branching;
 
--- Explicit activation performs the database conversion without consuming a
--- child branch or interval space and is idempotent for benchmark setup.
-CREATE DATABASE regression_branch_enable;
-\connect regression_branch_enable
+-- New databases start with branching enabled.  The compatibility function is
+-- therefore a no-op, and tables created before its call are already versioned.
+CREATE DATABASE regression_branch_default;
+\connect regression_branch_default
 CREATE TABLE activation_target (id integer PRIMARY KEY, value text);
 INSERT INTO activation_target VALUES (1, 'main');
-SELECT pg_branch_enable() AS first_activation;
-SELECT pg_branch_enable() AS second_activation;
+SELECT count(*) AS hidden_by_default
+FROM pg_attribute
+WHERE attrelid = 'activation_target'::regclass AND attishidden;
+SELECT pg_branch_enable() AS activation_needed;
 SELECT count(*) AS branches_after_activation FROM pg_branch WHERE brstate = 'a';
 CREATE BRANCH activation_child FROM main;
 SET BRANCH activation_child;
 SELECT * FROM activation_target;
 \connect regression
-DROP DATABASE regression_branch_enable;
+DROP DATABASE regression_branch_default;
