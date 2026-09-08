@@ -36,16 +36,14 @@ value
 -----
 (0 rows)
 
-step s2share: SELECT value FROM branch_lock_target WHERE id = 3 FOR KEY SHARE; <waiting ...>
-step s1c3: COMMIT; <waiting ...>
-step s2share: <... completed>
+step s2share: SELECT value FROM branch_lock_target WHERE id = 3 FOR KEY SHARE;
 value
 -----
 base3
 (1 row)
 
+step s1c3: COMMIT;
 step s2c3: COMMIT;
-step s1c3: <... completed>
 step s2notrig: DROP TRIGGER branch_lock_before_update ON branch_lock_target;
 step s1b4: BEGIN;
 step s1u4: UPDATE branch_lock_target SET value = 'dev4' WHERE id = 4;

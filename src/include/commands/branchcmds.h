@@ -53,6 +53,7 @@ extern bool BranchResolveTupleForUpdate(Relation relation, ItemPointer tid,
 									   bool *relocated);
 extern bool BranchResolveTupleForLock(Relation relation, ItemPointer tid,
 									 TupleTableSlot *slot,
+									 LockTupleMode tuple_lockmode,
 									 LockWaitPolicy wait_policy,
 									 bool *relocated, bool *would_block);
 extern void BranchRestoreInsertMetadata(Relation relation,

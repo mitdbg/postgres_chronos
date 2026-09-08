@@ -187,6 +187,7 @@ lnext:
 
 		if (BranchRelationIsVersioned(erm->relation) &&
 			!BranchResolveTupleForLock(erm->relation, &tid, markSlot,
+									   lockmode,
 									   erm->waitPolicy,
 									   &branch_relocated,
 									   &branch_would_block))

@@ -2966,6 +2966,7 @@ EvalPlanQualFetchRowMark(EPQState *epqstate, Index rti, TupleTableSlot *slot)
 				 * the sibling's replacement tuple or lose the row altogether.
 				 */
 				if (!BranchResolveTupleForLock(erm->relation, &tid, slot,
+											 LockTupleExclusive,
 											 LockWaitBlock, &relocated,
 											 &would_block))
 					return false;

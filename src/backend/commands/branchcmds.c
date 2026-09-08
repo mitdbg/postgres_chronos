@@ -1853,20 +1853,46 @@ BranchResolveTupleForUpdate(Relation relation, ItemPointer tid,
 {
 	bool		would_block;
 
-	return BranchResolveTupleForLock(relation, tid, slot, LockWaitBlock,
+	/* Preserve the historical writer compatibility used by interval rewrites. */
+	return BranchResolveTupleForLock(relation, tid, slot,
+									 LockTupleNoKeyExclusive,
+									 LockWaitBlock,
 									 relocated, &would_block);
 }
 
-/* Resolve a logical row while honoring SELECT FOR UPDATE's wait policy. */
+/* Map PostgreSQL tuple-lock conflicts onto the heavyweight lock table. */
+static LOCKMODE
+branch_tuple_lockmode(LockTupleMode tuple_lockmode)
+{
+	switch (tuple_lockmode)
+	{
+		case LockTupleKeyShare:
+			return AccessShareLock;
+		case LockTupleShare:
+			return ShareLock;
+		case LockTupleNoKeyExclusive:
+			return ShareUpdateExclusiveLock;
+		case LockTupleExclusive:
+			return AccessExclusiveLock;
+	}
+	elog(ERROR, "unrecognized tuple lock mode: %d", (int) tuple_lockmode);
+	return NoLock;
+}
+
+/* Resolve a logical row while honoring PostgreSQL's tuple-lock semantics. */
 bool
 BranchResolveTupleForLock(Relation relation, ItemPointer tid,
-						  TupleTableSlot *slot, LockWaitPolicy wait_policy,
+						  TupleTableSlot *slot,
+						  LockTupleMode tuple_lockmode,
+						  LockWaitPolicy wait_policy,
 						  bool *relocated, bool *would_block)
 {
 	ItemPointerData originaltid = *tid;
 	int64		rowid;
 	uint64		unsigned_rowid;
 	uint32		rowlock;
+	Oid			logicalrelid;
+	LOCKMODE	lockmode;
 
 	Assert(BranchRelationIsVersioned(relation));
 	*would_block = false;
@@ -1876,12 +1902,14 @@ BranchResolveTupleForLock(Relation relation, ItemPointer tid,
 		return false;
 	rowid = BranchTupleRowId(relation, slot);
 	unsigned_rowid = (uint64) rowid;
+	logicalrelid = BranchLogicalRelationOid(RelationGetRelid(relation));
 	rowlock = (uint32) unsigned_rowid ^ (uint32) (unsigned_rowid >> 32) ^
-		RelationGetRelid(relation);
+		logicalrelid;
+	lockmode = branch_tuple_lockmode(tuple_lockmode);
 	if (wait_policy == LockWaitBlock)
-		LockDatabaseObject(BranchSegmentRelationId, rowlock, 0, ExclusiveLock);
+		LockDatabaseObject(BranchSegmentRelationId, rowlock, 0, lockmode);
 	else if (!ConditionalLockDatabaseObject(BranchSegmentRelationId, rowlock, 0,
-										   ExclusiveLock))
+										   lockmode))
 	{
 		if (wait_policy == LockWaitError)
 			ereport(ERROR,
