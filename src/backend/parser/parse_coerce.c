@@ -1072,15 +1072,22 @@ coerce_record_to_complex(ParseState *pstate, Node *node,
 		Oid			exprtype;
 		Form_pg_attribute attr = TupleDescAttr(tupdesc, i);
 
-		/* Fill in NULLs for dropped columns in rowtype */
-		if (attr->attisdropped)
+		/* Fill physical-only positions without consuming a user field. */
+		if (attr->attisdropped || attr->attishidden)
 		{
 			/*
-			 * can't use atttypid here, but it doesn't really matter what type
-			 * the Const claims to be.
+			 * Dropped columns no longer have a usable type.  Hidden columns do,
+			 * and retaining it keeps the constructed physical row descriptor
+			 * exact while leaving their values for the storage layer to stamp.
 			 */
-			newargs = lappend(newargs,
-							  makeNullConst(INT4OID, -1, InvalidOid));
+			if (attr->attisdropped)
+				newargs = lappend(newargs,
+								  makeNullConst(INT4OID, -1, InvalidOid));
+			else
+				newargs = lappend(newargs,
+								  makeNullConst(attr->atttypid,
+												attr->atttypmod,
+												attr->attcollation));
 			continue;
 		}
 

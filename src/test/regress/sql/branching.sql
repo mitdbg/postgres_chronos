@@ -13,6 +13,8 @@ CREATE TABLE accounts
 INSERT INTO accounts VALUES
     (1, 'one@example.test', 10),
     (2, 'two@example.test', 20);
+SELECT (ROW(3, 'three@example.test', 30)::accounts).email
+       AS record_cast_hides_metadata;
 
 CREATE TABLE parent_fk (id integer PRIMARY KEY);
 CREATE TABLE child_fk
