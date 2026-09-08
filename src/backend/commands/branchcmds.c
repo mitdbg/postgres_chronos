@@ -2732,6 +2732,8 @@ static void
 branch_add_storage_index(Oid relid, const char *first, const char *second)
 {
 	Relation	heaprel;
+	char	   *oidname;
+	const char *label;
 	List	   *indexes;
 	ListCell   *lc;
 	AttrNumber	firstattnum;
@@ -2775,10 +2777,47 @@ branch_add_storage_index(Oid relid, const char *first, const char *second)
 	secondelem->name = pstrdup(second);
 	secondelem->ordering = SORTBY_DEFAULT;
 	secondelem->nulls_ordering = SORTBY_NULLS_DEFAULT;
+
+	/*
+	 * Table renames do not rename ordinary indexes.  Include the table OID in
+	 * internal index names so independently created same-named tables can be
+	 * moved into one schema without colliding on our implementation objects.
+	 */
+	oidname = psprintf("%u", relid);
+	label = strcmp(first, BRANCH_ROWID_ATTRIBUTE_NAME) == 0 ?
+		"rowid_low_idx" : "writer_rowid_idx";
+	index->idxname = ChooseRelationName("__pg_branch", oidname, label,
+									 get_rel_namespace(relid), false);
 	index->relation = branch_relation_rangevar(relid, false);
 	index->accessMethod = pstrdup(DEFAULT_INDEX_TYPE);
 	index->indexParams = list_make2(firstelem, secondelem);
 	branch_process_utility((Node *) index);
+}
+
+/* Add the mandatory indexes after CREATE TABLE has assigned the table OID. */
+void
+BranchCreateStorageIndexes(Oid relid)
+{
+	Relation	relation;
+	char		relkind;
+	bool		versioned;
+
+	if (BranchSchemaCopyDepth > 0 || !BranchDatabaseIsEnabled())
+		return;
+
+	relation = table_open(relid, AccessShareLock);
+	relkind = relation->rd_rel->relkind;
+	versioned = BranchRelationIsVersioned(relation);
+	table_close(relation, AccessShareLock);
+	if (!versioned ||
+		(relkind != RELKIND_RELATION &&
+		 relkind != RELKIND_PARTITIONED_TABLE))
+		return;
+
+	branch_add_storage_index(relid, BRANCH_ROWID_ATTRIBUTE_NAME,
+							 BRANCH_LOW_ATTRIBUTE_NAME);
+	branch_add_storage_index(relid, BRANCH_WRITER_ATTRIBUTE_NAME,
+							 BRANCH_ROWID_ATTRIBUTE_NAME);
 }
 
 /*

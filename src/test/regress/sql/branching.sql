@@ -42,6 +42,22 @@ $$;
 SELECT assign_account_plpgsql() AS plpgsql_assignment_hides_metadata;
 DROP FUNCTION assign_account_plpgsql();
 
+-- Internal indexes must not make ordinary cross-schema table moves collide.
+CREATE SCHEMA branch_move_a;
+CREATE SCHEMA branch_move_b;
+CREATE TABLE branch_move_a.same_name (id integer);
+CREATE TABLE branch_move_b.same_name (id integer);
+ALTER TABLE branch_move_a.same_name RENAME TO moved_table;
+ALTER TABLE branch_move_a.moved_table SET SCHEMA branch_move_b;
+SELECT count(*) AS moved_table_count
+FROM pg_class c
+JOIN pg_namespace n ON n.oid = c.relnamespace
+WHERE n.nspname = 'branch_move_b'
+  AND c.relname IN ('same_name', 'moved_table')
+  AND c.relkind = 'r';
+DROP SCHEMA branch_move_a CASCADE;
+DROP SCHEMA branch_move_b CASCADE;
+
 CREATE TABLE parent_fk (id integer PRIMARY KEY);
 CREATE TABLE child_fk
 (

@@ -43,6 +43,7 @@ extern bool BranchInitializeTupleDescMetadata(TupleDesc desc, Datum *values,
 extern bool BranchRelationIsVersioned(Relation relation);
 extern bool BranchRelationCanModifyInPlace(Relation relation);
 extern bool BranchSchemaCopyInProgress(void);
+extern void BranchCreateStorageIndexes(Oid relid);
 extern bool BranchTupleSlotIsVisible(Relation relation, TupleTableSlot *slot);
 extern int64 BranchTupleRowId(Relation relation, TupleTableSlot *slot);
 extern void BranchLockRowIdentity(Relation relation, int64 rowid);

@@ -105,8 +105,6 @@ static ColumnDef *makeBranchColumn(const char *name, Oid typeoid,
 								   const char *default_function);
 static bool addBranchColumns(CreateStmtContext *cxt, CreateStmt *stmt,
 							 Oid namespaceid);
-static IndexStmt *makeBranchIndex(CreateStmt *stmt, const char *first,
-								  const char *second);
 static void transformTableConstraint(CreateStmtContext *cxt,
 									 Constraint *constraint);
 static void transformTableLikeClause(CreateStmtContext *cxt,
@@ -174,7 +172,6 @@ transformCreateStmt(CreateStmt *stmt, const char *queryString)
 	Oid			namespaceid;
 	Oid			existing_relid;
 	ParseCallbackState pcbstate;
-	bool		branch_versioned;
 
 	/* Set up pstate */
 	pstate = make_parsestate(NULL);
@@ -261,7 +258,7 @@ transformCreateStmt(CreateStmt *stmt, const char *queryString)
 	if (stmt->ofTypename)
 		transformOfType(&cxt, stmt->ofTypename);
 
-	branch_versioned = addBranchColumns(&cxt, stmt, namespaceid);
+	(void) addBranchColumns(&cxt, stmt, namespaceid);
 
 	if (stmt->partspec)
 	{
@@ -341,16 +338,6 @@ transformCreateStmt(CreateStmt *stmt, const char *queryString)
 	 * Postprocess constraints that give rise to index definitions.
 	 */
 	transformIndexConstraints(&cxt);
-	/* Schema-copy heaps are populated before their indexes are built. */
-	if (branch_versioned && !BranchSchemaCopyInProgress())
-	{
-		cxt.alist = lappend(cxt.alist,
-			makeBranchIndex(stmt, BRANCH_ROWID_ATTRIBUTE_NAME,
-							BRANCH_LOW_ATTRIBUTE_NAME));
-		cxt.alist = lappend(cxt.alist,
-			makeBranchIndex(stmt, BRANCH_WRITER_ATTRIBUTE_NAME,
-							BRANCH_ROWID_ATTRIBUTE_NAME));
-	}
 
 	/*
 	 * Re-consideration of LIKE clauses should happen after creation of
@@ -494,28 +481,6 @@ addBranchColumns(CreateStmtContext *cxt, CreateStmt *stmt, Oid namespaceid)
 	return true;
 }
 
-static IndexStmt *
-makeBranchIndex(CreateStmt *stmt, const char *first, const char *second)
-{
-	IndexStmt  *index = makeNode(IndexStmt);
-	IndexElem  *firstelem = makeNode(IndexElem);
-	IndexElem  *secondelem = makeNode(IndexElem);
-
-	firstelem->name = pstrdup(first);
-	firstelem->ordering = SORTBY_DEFAULT;
-	firstelem->nulls_ordering = SORTBY_NULLS_DEFAULT;
-	secondelem->name = pstrdup(second);
-	secondelem->ordering = SORTBY_DEFAULT;
-	secondelem->nulls_ordering = SORTBY_NULLS_DEFAULT;
-
-	index->relation = copyObject(stmt->relation);
-	index->accessMethod = pstrdup(DEFAULT_INDEX_TYPE);
-	index->indexParams = list_make2(firstelem, secondelem);
-	index->transformed = false;
-	index->concurrent = false;
-	index->if_not_exists = false;
-	return index;
-}
 /*
  * generateSerialExtraStmts
  *		Generate CREATE SEQUENCE and ALTER SEQUENCE ... OWNED BY statements

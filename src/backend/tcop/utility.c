@@ -1212,7 +1212,14 @@ ProcessUtilitySlow(ParseState *pstate,
 												   true);
 
 							NewRelationCreateToastTable(address.objectId,
-														toast_options);
+													  toast_options);
+
+							/*
+							 * The relation OID is now known, so Chronos can give its
+							 * implementation indexes names that remain collision-free
+							 * across later table renames and schema moves.
+							 */
+							BranchCreateStorageIndexes(address.objectId);
 						}
 						else if (IsA(stmt, CreateForeignTableStmt))
 						{
