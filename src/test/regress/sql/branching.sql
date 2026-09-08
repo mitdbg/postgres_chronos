@@ -138,6 +138,17 @@ SELECT count(*) AS partition_leaf_storage_indexes
 FROM pg_index WHERE indrelid = 'branch_partitioned_p0'::regclass;
 DROP TABLE branch_partitioned;
 
+BEGIN;
+SET TRANSACTION ISOLATION LEVEL SERIALIZABLE;
+CREATE TABLE branch_serial_cursor (value integer);
+INSERT INTO branch_serial_cursor VALUES (1);
+DECLARE branch_cursor NO SCROLL CURSOR FOR
+  SELECT * FROM branch_serial_cursor FOR UPDATE;
+UPDATE branch_serial_cursor SET value = 2;
+FETCH ALL FROM branch_cursor;
+COMMIT;
+DROP TABLE branch_serial_cursor;
+
 CREATE TABLE parent_fk (id integer PRIMARY KEY);
 CREATE TABLE child_fk
 (

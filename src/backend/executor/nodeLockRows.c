@@ -198,9 +198,30 @@ lnext:
 			goto lnext;
 		}
 		if (branch_relocated && IsolationUsesXactSnapshot())
+		{
+			Datum		xminDatum;
+			TransactionId xmin;
+
+			xminDatum = slot_getsysattr(markSlot,
+									 MinTransactionIdAttributeNumber,
+									 &isNull);
+			Assert(!isNull);
+			xmin = DatumGetTransactionId(xminDatum);
+
+			/*
+			 * PostgreSQL treats a row changed by an earlier command in this
+			 * transaction as no longer eligible for this cursor.  A relocated
+			 * Chronos version has no physical HOT chain from the cursor's CTID,
+			 * so recognize the replacement's xmin explicitly before applying
+			 * the usual transaction-snapshot serialization rule.
+			 */
+			if (TransactionIdIsCurrentTransactionId(xmin))
+				goto lnext;
+
 			ereport(ERROR,
 					(errcode(ERRCODE_T_R_SERIALIZATION_FAILURE),
 					 errmsg("could not serialize access due to concurrent update")));
+		}
 
 		test = table_tuple_lock(erm->relation, &tid,
 								branch_relocated ? SnapshotSelf : estate->es_snapshot,

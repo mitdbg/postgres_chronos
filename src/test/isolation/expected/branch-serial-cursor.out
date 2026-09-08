@@ -1,0 +1,18 @@
+Parsed test spec with 2 sessions
+
+starting permutation: s1begin s1snapshot s1declare s2begin s2update s2commit s1fetch s1rollback
+step s1begin: BEGIN ISOLATION LEVEL SERIALIZABLE;
+step s1snapshot: SELECT count(*) FROM branch_serial_target;
+count
+-----
+    1
+(1 row)
+
+step s1declare: DECLARE branch_serial_cursor NO SCROLL CURSOR FOR
+                   SELECT * FROM branch_serial_target FOR UPDATE;
+step s2begin: BEGIN;
+step s2update: UPDATE branch_serial_target SET value = 'after' WHERE id = 1;
+step s2commit: COMMIT;
+step s1fetch: FETCH ALL FROM branch_serial_cursor;
+ERROR:  could not serialize access due to concurrent update
+step s1rollback: ROLLBACK;

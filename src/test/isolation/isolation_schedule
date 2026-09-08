@@ -131,6 +131,7 @@ test: ddl-dependency-locking
 test: pub-concurrent-drop
 test: drop-owned-grant
 test: branch-row-lock
+test: branch-serial-cursor
 test: branch-create-concurrent
 test: branch-drop-concurrent
 test: branch-private-dml
