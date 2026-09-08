@@ -185,7 +185,14 @@ lnext:
 		if (!IsolationUsesXactSnapshot())
 			lockflags |= TUPLE_LOCK_FLAG_FIND_LAST_VERSION;
 
+		/*
+		 * A private physical heap has no sibling branch version to resolve.
+		 * BranchRelationCanModifyInPlace() holds the branch guard against a
+		 * concurrent fork, so retain PostgreSQL's native tuple-lock arbitration
+		 * and waiter ordering in this common case.
+		 */
 		if (BranchRelationIsVersioned(erm->relation) &&
+			!BranchRelationCanModifyInPlace(erm->relation) &&
 			!BranchResolveTupleForLock(erm->relation, &tid, markSlot,
 									   lockmode,
 									   erm->waitPolicy,
