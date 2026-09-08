@@ -2278,26 +2278,23 @@ fireRIRrules(Query *parsetree, List *activeRIRs)
 
 		if (BranchGetAttributeNumbers(rel, branchattrs))
 		{
-			bool		private_target;
+			bool		private_relation;
 			BranchCoordinate *point = palloc_object(BranchCoordinate);
 			Const	   *pointconst;
 			Expr	   *lowqual;
 			Expr	   *highqual;
 			Expr	   *deletedqual;
 
-			BranchAcquireLock(rt_index == parsetree->resultRelation ?
-							  RowExclusiveLock : AccessShareLock);
-			private_target = rt_index == parsetree->resultRelation &&
-				(parsetree->commandType == CMD_UPDATE ||
-				 parsetree->commandType == CMD_DELETE ||
-				 parsetree->commandType == CMD_MERGE) &&
-				BranchRelationCanModifyInPlace(rel);
-			if (private_target)
+			private_relation = BranchRelationCanModifyInPlace(rel);
+			if (private_relation)
 			{
 				/*
-				 * The branch lock prevents a concurrent fork, and exact schema
-				 * ownership guarantees every physical row belongs to this branch.
-				 * Ordinary PostgreSQL DML therefore needs no interval filter.
+				 * The transaction-scoped branch lock prevents a concurrent fork,
+				 * and exact schema ownership guarantees every physical row belongs
+				 * to this branch.  Reads and writes can therefore use PostgreSQL's
+				 * native plans without an interval filter.  CREATE BRANCH broadcasts
+				 * relcache invalidation before a cached private plan can be reused
+				 * against a newly shared version.
 				 */
 				securityQuals = NIL;
 				goto branch_quals_done;

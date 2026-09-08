@@ -695,5 +695,22 @@ SELECT count(*) AS branches_after_activation FROM pg_branch WHERE brstate = 'a';
 CREATE BRANCH activation_child FROM main;
 SET BRANCH activation_child;
 SELECT * FROM activation_target;
+SET BRANCH main;
+CREATE TABLE branch_cached_read (id integer PRIMARY KEY, value text);
+INSERT INTO branch_cached_read VALUES (1, 'main');
+PREPARE branch_cached_plan AS
+  SELECT value FROM branch_cached_read WHERE id = 1;
+EXECUTE branch_cached_plan;
+CREATE BRANCH branch_cached_child FROM main;
+SET BRANCH branch_cached_child;
+UPDATE branch_cached_read SET value = 'child' WHERE id = 1;
+SET BRANCH main;
+EXECUTE branch_cached_plan;
+SET BRANCH branch_cached_child;
+EXECUTE branch_cached_plan;
+DEALLOCATE branch_cached_plan;
+SET BRANCH main;
+DROP BRANCH branch_cached_child;
+DROP TABLE branch_cached_read;
 \connect regression
 DROP DATABASE regression_branch_default;
