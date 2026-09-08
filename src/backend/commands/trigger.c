@@ -3388,6 +3388,7 @@ GetTupleForTrigger(EState *estate,
 		 * heap update chain.
 		 */
 		if (BranchRelationIsVersioned(relation) &&
+			!BranchRelationCanModifyInPlace(relation) &&
 			!BranchResolveTupleForUpdate(relation, tid, oldslot,
 									 &branch_relocated))
 		{
