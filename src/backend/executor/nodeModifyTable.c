@@ -2228,12 +2228,13 @@ ldelete:
 					inputslot = EvalPlanQualSlot(context->epqstate, resultRelationDesc,
 												 resultRelInfo->ri_RangeTableIndex);
 
-					if (branchOldSlot != NULL &&
-						BranchFindVisibleTuple(resultRelationDesc,
-									   BranchTupleRowId(resultRelationDesc,
-														branchOldSlot),
-									   inputslot))
+					if (branchState.versioned)
 					{
+						if (!BranchFindVisibleTuple(resultRelationDesc,
+									BranchTupleRowId(resultRelationDesc,
+													 branchOldSlot),
+									inputslot))
+							return NULL;
 						*tupleid = inputslot->tts_tid;
 						result = table_tuple_lock(resultRelationDesc, tupleid,
 											  SnapshotSelf, inputslot,
@@ -2256,9 +2257,6 @@ ldelete:
 						}
 						goto ldelete;
 					}
-					else if (branchOldSlot != NULL)
-						return NULL;
-
 					result = table_tuple_lock(resultRelationDesc, tupleid,
 											  estate->es_snapshot,
 											  inputslot, estate->es_output_cid,
