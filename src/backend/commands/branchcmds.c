@@ -109,6 +109,9 @@ static List *branch_child_names(Oid parentid);
 static void enable_database_branching(void);
 static void branch_mark_database_enabled(void);
 static void branch_refresh_session_head_locked(void);
+static bool branch_prepare_relation_ddl(RangeVar *relation, bool missing_ok,
+										bool hold_session_lock,
+										bool *copied);
 static void branch_set_tuple_metadata(Relation relation, TupleTableSlot *slot,
 									  const BranchCoordinate *low,
 									  const BranchCoordinate *high,
@@ -140,6 +143,7 @@ static void branch_add_storage_index(Oid relid, const char *first,
 #define ROOT_BRANCH_SEGMENT_OID 9101
 #define BRANCH_SCHEMA_COPY_BATCH_SIZE 1000
 #define BRANCH_DDL_LOCK_SUBID 3
+#define BRANCH_CONCURRENT_INDEX_LOCK_SUBID 4
 
 typedef struct BranchPendingIndexWorker
 {
@@ -1126,11 +1130,16 @@ branch_clone_relation(Oid logicalrelid, Oid sourcerelid, Oid versionid)
 }
 
 /*
- * Fork a shared schema version before ALTER TABLE.  A private version follows
- * PostgreSQL's regular ALTER path directly, preserving native fast DDL.
+ * Fork a shared schema version before relation-local DDL.  A private version
+ * follows PostgreSQL's regular DDL path directly, preserving instant DDL.
+ *
+ * CREATE INDEX CONCURRENTLY commits internally.  Its caller requests a
+ * session-level database DDL gate so a fork cannot make the target physical
+ * version shared between the index's build and validation transactions.
  */
-void
-BranchPrepareAlterTable(AlterTableStmt *stmt, LOCKMODE lockmode)
+static bool
+branch_prepare_relation_ddl(RangeVar *relation, bool missing_ok,
+							bool hold_session_lock, bool *copied)
 {
 	Relation	versionrel;
 	Relation	sourcerel;
@@ -1140,6 +1149,7 @@ BranchPrepareAlterTable(AlterTableStmt *stmt, LOCKMODE lockmode)
 	Oid			versionid;
 	Oid			ownerid;
 	bool		has_secondary;
+	bool		session_lock_held = false;
 	Datum		values[Natts_pg_branch_relversion];
 	bool		nulls[Natts_pg_branch_relversion];
 	HeapTuple	tuple;
@@ -1147,13 +1157,12 @@ BranchPrepareAlterTable(AlterTableStmt *stmt, LOCKMODE lockmode)
 	if (BranchSchemaCopyDepth > 0 || IsBootstrapProcessingMode() ||
 		!IsTransactionState() ||
 		!BranchDatabaseIsEnabled())
-		return;
+		return false;
 
 	/* The predecessor only needs to remain schema-stable while inspected. */
-	sourcerelid = RangeVarGetRelid(stmt->relation, AccessShareLock,
-								stmt->missing_ok);
+	sourcerelid = RangeVarGetRelid(relation, AccessShareLock, missing_ok);
 	if (!OidIsValid(sourcerelid))
-		return;
+		return false;
 	logicalrelid = BranchLogicalRelationOid(sourcerelid);
 	sourcerel = relation_open(sourcerelid, NoLock);
 	if ((sourcerel->rd_rel->relkind != RELKIND_RELATION &&
@@ -1161,7 +1170,7 @@ BranchPrepareAlterTable(AlterTableStmt *stmt, LOCKMODE lockmode)
 		!BranchRelationIsVersioned(sourcerel))
 	{
 		relation_close(sourcerel, NoLock);
-		return;
+		return false;
 	}
 	ownerid = sourcerel->rd_rel->relowner;
 	if (!object_ownercheck(RelationRelationId, sourcerelid, GetUserId()))
@@ -1170,17 +1179,29 @@ BranchPrepareAlterTable(AlterTableStmt *stmt, LOCKMODE lockmode)
 	relation_close(sourcerel, NoLock);
 
 	/*
-	 * Serialize branch-local DDL upgrades independently of writers.  The
-	 * writer-compatible branch lock prevents a fork while private DDL runs.
-	 * Only a real schema copy upgrades the branch lock and waits for writers.
+	 * Serialize DDL upgrades of this logical relation independently of other
+	 * tables.  The writer-compatible branch lock prevents a fork while private
+	 * DDL runs.  Only a real schema copy upgrades the branch lock and waits for
+	 * writers.
 	 */
 	BranchEnsureSession();
-	LockDatabaseObject(BranchRelationId, MyBranchId,
+	LockDatabaseObject(BranchRelVersionRelationId, logicalrelid,
 					   BRANCH_DDL_LOCK_SUBID, ExclusiveLock);
 	BranchAcquireLock(RowExclusiveLock);
 	branch_ensure_indexes_ready(sourcerelid);
 	if (branch_physical_version_is_private(logicalrelid, sourcerelid))
-		return;
+	{
+		if (hold_session_lock)
+		{
+			LOCKTAG		tag;
+
+			SET_LOCKTAG_OBJECT(tag, MyDatabaseId, BranchRelationId, InvalidOid,
+							   BRANCH_CONCURRENT_INDEX_LOCK_SUBID);
+			(void) LockAcquire(&tag, RowExclusiveLock, true, false);
+			session_lock_held = true;
+		}
+		return session_lock_held;
+	}
 	BranchAcquireLock(ShareRowExclusiveLock);
 
 	versionrel = table_open(BranchRelVersionRelationId, RowExclusiveLock);
@@ -1233,6 +1254,56 @@ BranchPrepareAlterTable(AlterTableStmt *stmt, LOCKMODE lockmode)
 	branch_reset_private_dml_cache();
 	if (has_secondary)
 		branch_schedule_index_worker(versionid, ownerid);
+	if (copied != NULL)
+		*copied = true;
+	return session_lock_held;
+}
+
+void
+BranchPrepareAlterTable(AlterTableStmt *stmt, LOCKMODE lockmode)
+{
+	(void) branch_prepare_relation_ddl(stmt->relation, stmt->missing_ok, false,
+									 NULL);
+}
+
+bool
+BranchPrepareIndexStmt(IndexStmt *stmt)
+{
+	bool		copied = false;
+	bool		session_lock_held;
+
+	/* Preserve CREATE INDEX IF NOT EXISTS as a no-op without copying a heap. */
+	if (stmt->if_not_exists && stmt->idxname != NULL)
+	{
+		Oid			relid = RangeVarGetRelid(stmt->relation, AccessShareLock,
+											 false);
+
+		if (OidIsValid(get_relname_relid(stmt->idxname,
+										  get_rel_namespace(relid))))
+			return false;
+	}
+
+	session_lock_held = branch_prepare_relation_ddl(stmt->relation, false,
+												 stmt->concurrent, &copied);
+	/*
+	 * The new target is private and unpublished, so a concurrent build adds
+	 * transaction boundaries without admitting any additional useful work.
+	 */
+	if (copied)
+		stmt->concurrent = false;
+	return session_lock_held;
+}
+
+void
+BranchFinishIndexStmt(bool session_lock_held)
+{
+	LOCKTAG		tag;
+
+	if (!session_lock_held)
+		return;
+	SET_LOCKTAG_OBJECT(tag, MyDatabaseId, BranchRelationId, InvalidOid,
+					   BRANCH_CONCURRENT_INDEX_LOCK_SUBID);
+	(void) LockRelease(&tag, RowExclusiveLock, true);
 }
 
 int64
@@ -3182,6 +3253,19 @@ CreateBranch(CreateBranchStmt *stmt)
 	HeapTuple	newtuple;
 	const char *source_name;
 
+	/*
+	 * Take this before catalog lookup establishes an xmin.  A concurrent index
+	 * build holds the conflicting lock across its internal transactions and
+	 * later waits for older snapshots; looking up the source branch first
+	 * would create a lock/snapshot cycle with that wait.
+	 */
+	if (!ConditionalLockDatabaseObject(BranchRelationId, InvalidOid,
+										 BRANCH_CONCURRENT_INDEX_LOCK_SUBID,
+										 ShareLock))
+		ereport(ERROR,
+				(errcode(ERRCODE_OBJECT_IN_USE),
+				 errmsg("cannot create a branch during a concurrent index build"),
+				 errhint("Retry CREATE BRANCH after the index build finishes.")));
 	require_database_privilege(ACL_CREATE);
 	BranchEnsureSession();
 

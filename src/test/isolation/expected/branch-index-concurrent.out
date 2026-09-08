@@ -1,0 +1,50 @@
+Parsed test spec with 3 sessions
+
+starting permutation: hold_build set_parent build_index fork_child release_build fork_retry set_child child_index set_main main_index
+step hold_build: SELECT pg_advisory_lock(982451653);
+pg_advisory_lock
+----------------
+                
+(1 row)
+
+step set_parent: SET BRANCH branch_cic_parent;
+step build_index: 
+  CREATE INDEX CONCURRENTLY branch_cic_value_idx
+    ON branch_cic_target (value)
+    WHERE branch_cic_wait(value);
+ <waiting ...>
+step fork_child: CREATE BRANCH branch_cic_child FROM branch_cic_parent;
+ERROR:  cannot create a branch during a concurrent index build
+step release_build: SELECT pg_advisory_unlock(982451653); <waiting ...>
+step build_index: <... completed>
+step fork_retry: CREATE BRANCH branch_cic_child FROM branch_cic_parent;
+step release_build: <... completed>
+pg_advisory_unlock
+------------------
+t                 
+(1 row)
+
+step set_child: SET BRANCH branch_cic_child;
+step child_index: 
+  SELECT count(*)
+  FROM pg_index
+  WHERE indrelid = 'branch_cic_target'::regclass
+    AND indexrelid = 'branch_cic_value_idx'::regclass;
+
+count
+-----
+    1
+(1 row)
+
+step set_main: SET BRANCH main;
+step main_index: 
+  SELECT count(*)
+  FROM pg_index
+  WHERE indrelid = 'branch_cic_target'::regclass
+    AND indexrelid = 'branch_cic_value_idx'::regclass;
+
+count
+-----
+    0
+(1 row)
+

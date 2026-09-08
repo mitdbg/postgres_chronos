@@ -135,3 +135,4 @@ test: branch-serial-cursor
 test: branch-create-concurrent
 test: branch-drop-concurrent
 test: branch-private-dml
+test: branch-index-concurrent

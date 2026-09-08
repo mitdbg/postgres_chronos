@@ -242,10 +242,10 @@ point. Index construction validates exclusion constraints once per active
 point. Foreign-key checks use PostgreSQL's SPI path in branching databases
 because the direct RI index probe bypasses query rewrite.
 
-### 2.5 Branch-local ALTER TABLE
+### 2.5 Branch-local relation DDL
 
-The implementation uses eager physical copy on the first schema change to a
-shared relation. `BranchPrepareAlterTable()` takes
+The implementation uses eager physical copy on the first `ALTER TABLE` or
+`CREATE INDEX` against a shared relation. The DDL preparation path takes
 `ShareRowExclusiveLock` on the branch and `AccessShareLock` on the source
 table. Readers continue to use the source while the copy runs.
 
@@ -260,9 +260,16 @@ writer to each copied tuple.
 
 Before installing the relation binding, PostgreSQL builds the two internal
 indexes and all primary, unique, and exclusion indexes. The binding then makes
-the new table the target of the original `ALTER TABLE`. PostgreSQL takes the
-ALTER lock, including `AccessExclusiveLock` when required, on this private
-target rather than the shared source.
+the new table the target of the original DDL. PostgreSQL takes the requested
+table or index-build lock on this private target rather than the shared source.
+
+On a newly copied, unpublished target, `CREATE INDEX CONCURRENTLY` uses a
+regular bulk build: no other session can reach the target, and adding internal
+transactions would provide no concurrency. On an existing private target it
+retains PostgreSQL's multi-transaction execution and holds a session-level
+database DDL gate until validation completes. A concurrent `CREATE BRANCH`
+fails with a retryable error instead of sharing a half-built index or forming a
+lock cycle with PostgreSQL's older-snapshot wait.
 
 After commit, a dynamic background worker copies ordinary secondary indexes
 with a regular PostgreSQL index build. A later ALTER waits for pending indexes
@@ -296,7 +303,7 @@ rewrite, executor, table access, and index enforcement boundaries.
 | Core branch code | [branchcmds.c](src/backend/commands/branchcmds.c) and [branchcmds.h](src/include/commands/branchcmds.h) implement catalog conversion, allocation, locking, interval writes, schema copies, and deletion |
 | Coordinate type | [branchcoord.c](src/backend/utils/adt/branchcoord.c), [branchcoord.h](src/include/utils/branchcoord.h), and the type, procedure, operator, and opclass catalog data add `pg_branch_coord` |
 | Catalogs | [pg_branch.h](src/include/catalog/pg_branch.h), [pg_branch_segment.h](src/include/catalog/pg_branch_segment.h), [pg_branch_relversion.h](src/include/catalog/pg_branch_relversion.h), their data files, `Catalog.pm`, and bootstrap code add branch metadata |
-| SQL interface | `gram.y`, `parsenodes.h`, `kwlist.h`, `cmdtaglist.h`, and `utility.c` add CREATE and DROP BRANCH and prepare ALTER TABLE |
+| SQL interface | `gram.y`, `parsenodes.h`, `kwlist.h`, `cmdtaglist.h`, and `utility.c` add CREATE and DROP BRANCH and prepare ALTER TABLE and CREATE INDEX |
 | Session state | `guc_parameters.dat` and `guc_tables.c` define `branch` and `branch_interval_fanout` |
 | Relation reads | `namespace.c` resolves physical schema versions, while `rewriteHandler.c` adds visibility predicates |
 | Record writes | `execMain.c`, `nodeModifyTable.c`, `nodeLockRows.c`, and `trigger.c` add branch locks, interval splitting, private DML, and tuple relocation |
@@ -493,14 +500,14 @@ Stop the example server with the following command.
 
 ### 5.1 Schema and database records
 
-Branch-local schema copying currently covers `ALTER TABLE` on ordinary,
-nonpartitioned heap tables. Relation creation, deletion, and rename still use
-shared PostgreSQL catalogs. Partition topology, schemas, views, rules, triggers,
-foreign-key dependency closure, ownership, ACLs, comments, and extension
-metadata do not yet receive complete per-branch copies. `CREATE TABLE ...
-LIKE` also omits several dependent records, so an ALTER that creates a
-physical table does not reproduce every trigger, rule, ACL, or dependency of
-the source.
+Branch-local schema copying currently covers `ALTER TABLE` and `CREATE INDEX`
+on ordinary, nonpartitioned heap tables. Relation creation, deletion, rename,
+and standalone index deletion still use shared PostgreSQL catalogs. Partition
+topology, schemas, views, rules, triggers, foreign-key dependency closure,
+ownership, ACLs, comments, and extension metadata do not yet receive complete
+per-branch copies. `CREATE TABLE ... LIKE` also omits several dependent
+records, so a DDL operation that creates a physical table does not reproduce
+every trigger, rule, ACL, or dependency of the source.
 
 Sequences remain global, including serial and identity sequences. Temporary
 tables, large objects, materialized views, and foreign tables are outside the
@@ -522,9 +529,10 @@ Worker registration depends on `max_worker_processes`, and secondary index
 recovery has no durable retry queue.
 
 The unique and exclusion changes cover PostgreSQL's core implementations.
-Concurrent index builds, deferred-constraint corner cases, extension index
-access methods, and table access methods that bypass the modified tuple probes
-need additional validation.
+Concurrent btree index creation is covered by branch regression and concurrency
+tests. Deferred-constraint corner cases, extension index access methods, and
+table access methods that bypass the modified tuple probes need additional
+validation.
 
 ### 5.3 Deletion, backup, and replication
 

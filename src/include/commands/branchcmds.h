@@ -68,6 +68,8 @@ extern Datum pg_branch_enable(PG_FUNCTION_ARGS);
 extern Datum pg_branch_logical_relation(PG_FUNCTION_ARGS);
 extern Datum pg_branch_relation_is_current(PG_FUNCTION_ARGS);
 extern void BranchPrepareAlterTable(AlterTableStmt *stmt, LOCKMODE lockmode);
+extern bool BranchPrepareIndexStmt(IndexStmt *stmt);
+extern void BranchFinishIndexStmt(bool session_lock_held);
 extern PGDLLEXPORT void BranchIndexWorkerMain(Datum main_arg);
 extern PGDLLEXPORT void BranchGcWorkerMain(Datum main_arg);
 extern void CreateBranch(CreateBranchStmt *stmt);

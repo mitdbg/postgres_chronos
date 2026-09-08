@@ -135,9 +135,10 @@ coordinate allocation only and does not cap the number of children.
 
 ## 5. Change a table schema
 
-`ALTER TABLE` on an ordinary, nonpartitioned table is branch-local. The first
-ALTER on a shared table copies the records visible to the selected branch into
-a private physical table and then applies the requested change.
+`ALTER TABLE` and `CREATE INDEX` on an ordinary, nonpartitioned table are
+branch-local. The first such command on a shared table copies the records
+visible to the selected branch into a private physical table and then applies
+the requested change.
 
 ~~~sql
 SET BRANCH experiment;
@@ -146,6 +147,8 @@ ALTER TABLE accounts
     ADD COLUMN note text NOT NULL DEFAULT '';
 
 UPDATE accounts SET note = 'candidate result' WHERE id = 3;
+
+CREATE INDEX CONCURRENTLY accounts_note_idx ON accounts (note);
 ~~~
 
 The new column exists on `experiment` and descendants created from it
@@ -162,13 +165,16 @@ ORDER BY ordinal_position;
 ~~~
 
 The initial schema change copies the visible heap and builds required indexes,
-so its cost grows with table size. Later metadata-only ALTER operations on the
-private table use PostgreSQL's regular fast path. Ordinary secondary indexes
-from the source are built by a background worker after commit.
+so its cost grows with table size. Later metadata-only ALTER operations and
+index builds on the private table use PostgreSQL's regular paths. Ordinary
+secondary indexes from the source are built by a background worker after
+commit. A concurrent index build on an existing private table does not make
+the index visible to sibling branches. `CREATE BRANCH` reports a retryable
+error if it overlaps that build.
 
-Relation creation, deletion, and rename do not yet provide complete
-branch-local schema semantics. Keep those operations outside workflows that
-require independent schemas.
+Relation creation, deletion, rename, and standalone index deletion do not yet
+provide complete branch-local schema semantics. Keep those operations outside
+workflows that require independent schemas.
 
 ## 6. Inspect branches
 

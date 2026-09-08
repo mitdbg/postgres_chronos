@@ -199,6 +199,14 @@ CREATE TABLE schema_copy_target
 );
 CREATE INDEX schema_copy_target_value_idx ON schema_copy_target (value);
 INSERT INTO schema_copy_target VALUES (1, 'one'), (2, 'two');
+CREATE TABLE branch_index_target
+(
+    id integer,
+    source_value integer,
+    dev_value integer
+);
+CREATE INDEX branch_index_source_idx ON branch_index_target (source_value);
+INSERT INTO branch_index_target VALUES (1, 10, 100), (2, 20, 200);
 CREATE VIEW account_view AS SELECT id, email, balance FROM accounts;
 CREATE VIEW account_join_view AS
     SELECT a.id, a.email
@@ -381,6 +389,11 @@ WHERE pid = pg_backend_pid()
 ROLLBACK;
 
 CREATE BRANCH dev;
+CREATE INDEX IF NOT EXISTS branch_index_source_idx
+    ON branch_index_target (source_value);
+SELECT count(*) = 0 AS index_noop_avoids_schema_copy
+FROM pg_branch_relversion
+WHERE brvlogical = 'branch_index_target'::regclass;
 BEGIN;
 UPDATE accounts SET balance = balance WHERE id = -1;
 SELECT count(*) > 0 AS forked_heap_uses_logical_locks
@@ -424,6 +437,15 @@ ALTER TABLE accounts ADD COLUMN __pg_branch_fake integer;
 
 SHOW BRANCH;
 SET BRANCH dev;
+
+CREATE INDEX CONCURRENTLY branch_index_dev_idx
+    ON branch_index_target (dev_value);
+SELECT count(*) AS dev_branch_indexes
+FROM pg_index i
+JOIN pg_attribute a ON a.attrelid = i.indrelid
+                   AND a.attnum = i.indkey[0]
+WHERE i.indrelid = 'branch_index_target'::regclass
+  AND a.attname = 'dev_value';
 
 COPY copy_target FROM STDIN WITH (FORMAT csv);
 2,dev
@@ -649,6 +671,12 @@ SELECT * FROM accounts ORDER BY id;
 
 SET BRANCH main;
 SELECT * FROM accounts ORDER BY id;
+SELECT count(*) AS main_branch_indexes
+FROM pg_index i
+JOIN pg_attribute a ON a.attrelid = i.indrelid
+                   AND a.attnum = i.indkey[0]
+WHERE i.indrelid = 'branch_index_target'::regclass
+  AND a.attname = 'dev_value';
 SELECT count(*) AS bulk_main_rows
 FROM bulk_update_target WHERE value = 1;
 SELECT string_agg(column_name::text, ',' ORDER BY ordinal_position)

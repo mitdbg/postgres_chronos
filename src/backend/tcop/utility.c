@@ -1488,6 +1488,7 @@ ProcessUtilitySlow(ParseState *pstate,
 					LOCKMODE	lockmode;
 					int			nparts = -1;
 					bool		is_alter_table;
+					bool		branch_session_lock = false;
 
 					if (stmt->concurrent)
 						PreventInTransactionBlock(isTopLevel,
@@ -1502,6 +1503,8 @@ ProcessUtilitySlow(ParseState *pstate,
 					 * eventually be needed here, so the lockmode calculation
 					 * needs to match what DefineIndex() does.
 					 */
+					if (isCompleteQuery)
+						branch_session_lock = BranchPrepareIndexStmt(stmt);
 					lockmode = stmt->concurrent ? ShareUpdateExclusiveLock
 						: ShareLock;
 					relid =
@@ -1583,6 +1586,7 @@ ProcessUtilitySlow(ParseState *pstate,
 									true,	/* check_not_in_use */
 									false,	/* skip_build */
 									false); /* quiet */
+					BranchFinishIndexStmt(branch_session_lock);
 
 					/*
 					 * Add the CREATE INDEX node itself to stash right away;
