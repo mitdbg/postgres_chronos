@@ -194,7 +194,26 @@ WHERE attrelid IN ('accounts'::regclass,
                    'measurements_high'::regclass)
   AND attishidden;
 
+BEGIN;
+UPDATE accounts SET balance = balance WHERE id = -1;
+SELECT count(*) = 0 AS pristine_heap_uses_private_dml
+FROM pg_locks
+WHERE pid = pg_backend_pid()
+  AND locktype = 'object'
+  AND classid = 'pg_branch_segment'::regclass
+  AND objsubid = 1;
+ROLLBACK;
+
 CREATE BRANCH dev;
+BEGIN;
+UPDATE accounts SET balance = balance WHERE id = -1;
+SELECT count(*) > 0 AS forked_heap_uses_logical_locks
+FROM pg_locks
+WHERE pid = pg_backend_pid()
+  AND locktype = 'object'
+  AND classid = 'pg_branch_segment'::regclass
+  AND objsubid = 1;
+ROLLBACK;
 CREATE PUBLICATION branch_pub FOR TABLE accounts;
 INSERT INTO accounts VALUES (6, 'main-after-fork@example.test', 60);
 INSERT INTO parent_fk VALUES (2);

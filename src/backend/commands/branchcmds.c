@@ -543,10 +543,23 @@ BranchRelationCanModifyInPlace(Relation relation)
 		return false;
 
 	logicalrelid = BranchLogicalRelationOid(physicalrelid);
-	/* Be conservative for the original physical heap. */
-	is_private = logicalrelid != physicalrelid &&
-		branch_relation_for_point(logicalrelid, &MyBranchPoint) == physicalrelid &&
-		branch_schema_version_is_private(logicalrelid, physicalrelid);
+	if (logicalrelid == physicalrelid)
+	{
+		/*
+		 * The original heap is private until the first fork consumes part of
+		 * its full coordinate interval.  Forking is serialized by the branch
+		 * lock acquired above, and the allocator never reconstructs the full
+		 * interval after it has been split.
+		 */
+		is_private = MyBranchLow.hi == 0 && MyBranchLow.lo == 0 &&
+			MyBranchHigh.hi == PG_UINT64_MAX &&
+			MyBranchHigh.lo == PG_UINT64_MAX;
+	}
+	else
+		is_private =
+			branch_relation_for_point(logicalrelid,
+									  &MyBranchPoint) == physicalrelid &&
+			branch_schema_version_is_private(logicalrelid, physicalrelid);
 
 	oldcontext = MemoryContextSwitchTo(TopTransactionContext);
 	if (is_private)
@@ -1698,10 +1711,18 @@ BranchPrepareExecutorLocks(PlannedStmt *plannedstmt)
 	{
 		RangeTblEntry *rte = list_nth_node(RangeTblEntry,
 											 plannedstmt->rtable, rti - 1);
+		Relation	relation;
 		Oid			logicalrelid;
 
 		if (rte->rtekind != RTE_RELATION)
 			continue;
+		relation = table_open(rte->relid, NoLock);
+		if (BranchRelationCanModifyInPlace(relation))
+		{
+			table_close(relation, NoLock);
+			continue;
+		}
+		table_close(relation, NoLock);
 		logicalrelid = BranchLogicalRelationOid(rte->relid);
 		if (!list_member_oid(logicalrelids, logicalrelid))
 			logicalrelids = lappend_oid(logicalrelids, logicalrelid);
