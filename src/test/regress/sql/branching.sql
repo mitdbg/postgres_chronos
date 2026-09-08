@@ -21,6 +21,15 @@ AS 'SELECT $1, $2, $3';
 SELECT (make_account(4, 'four@example.test', 40)).email
        AS function_result_hides_metadata;
 DROP FUNCTION make_account(integer, text, integer);
+CREATE FUNCTION make_accounts_plpgsql() RETURNS SETOF accounts
+LANGUAGE plpgsql AS $$
+BEGIN
+    RETURN QUERY SELECT 5, 'five@example.test'::text, 50;
+END
+$$;
+SELECT email AS plpgsql_result_hides_metadata
+FROM make_accounts_plpgsql();
+DROP FUNCTION make_accounts_plpgsql();
 
 CREATE TABLE parent_fk (id integer PRIMARY KEY);
 CREATE TABLE child_fk

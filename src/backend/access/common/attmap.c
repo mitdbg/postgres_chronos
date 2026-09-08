@@ -63,9 +63,11 @@ free_attrmap(AttrMap *map)
  * build_attrmap_by_position
  *
  * Return a palloc'd bare attribute map for tuple conversion, matching input
- * and output columns by position.  Dropped columns are ignored in both input
- * and output, marked as 0.  This is normally a subroutine for
- * convert_tuples_by_position in tupconvert.c, but it can be used standalone.
+ * and output columns by position.  Dropped and hidden columns are ignored in
+ * the logical position count.  Matching hidden columns are preserved by name;
+ * otherwise their output map entry remains 0.  This is normally a subroutine
+ * for convert_tuples_by_position in tupconvert.c, but it can be used
+ * standalone.
  *
  * Note: the errdetail messages speak of indesc as the "returned" rowtype,
  * outdesc as the "expected" rowtype.  This is okay for current uses but
@@ -92,7 +94,7 @@ build_attrmap_by_position(TupleDesc indesc,
 	attrMap = make_attrmap(n);
 
 	j = 0;						/* j is next physical input attribute */
-	nincols = noutcols = 0;		/* these count non-dropped attributes */
+	nincols = noutcols = 0;		/* these count user-visible attributes */
 	same = true;
 	for (i = 0; i < n; i++)
 	{
@@ -100,12 +102,32 @@ build_attrmap_by_position(TupleDesc indesc,
 
 		if (outatt->attisdropped)
 			continue;			/* attrMap->attnums[i] is already 0 */
+		if (outatt->attishidden)
+		{
+			int			k;
+
+			for (k = 0; k < indesc->natts; k++)
+			{
+				Form_pg_attribute inatt = TupleDescAttr(indesc, k);
+
+				if (!inatt->attisdropped && inatt->attishidden &&
+					strcmp(NameStr(outatt->attname),
+						   NameStr(inatt->attname)) == 0 &&
+					outatt->atttypid == inatt->atttypid &&
+					outatt->atttypmod == inatt->atttypmod)
+				{
+					attrMap->attnums[i] = (AttrNumber) (k + 1);
+					break;
+				}
+			}
+			continue;
+		}
 		noutcols++;
 		for (; j < indesc->natts; j++)
 		{
 			Form_pg_attribute inatt = TupleDescAttr(indesc, j);
 
-			if (inatt->attisdropped)
+			if (inatt->attisdropped || inatt->attishidden)
 				continue;
 			nincols++;
 
@@ -133,13 +155,14 @@ build_attrmap_by_position(TupleDesc indesc,
 	/* Check for unused input columns */
 	for (; j < indesc->natts; j++)
 	{
-		if (TupleDescCompactAttr(indesc, j)->attisdropped)
+		if (TupleDescAttr(indesc, j)->attisdropped ||
+			TupleDescAttr(indesc, j)->attishidden)
 			continue;
 		nincols++;
 		same = false;			/* we'll complain below */
 	}
 
-	/* Report column count mismatch using the non-dropped-column counts */
+	/* Report column count mismatch using the user-visible column counts. */
 	if (!same)
 		ereport(ERROR,
 				(errcode(ERRCODE_DATATYPE_MISMATCH),
