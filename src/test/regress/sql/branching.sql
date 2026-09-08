@@ -58,6 +58,16 @@ WHERE n.nspname = 'branch_move_b'
 DROP SCHEMA branch_move_a CASCADE;
 DROP SCHEMA branch_move_b CASCADE;
 
+CREATE TABLE branch_rule_source (id integer, value text);
+CREATE TABLE branch_rule_target (id integer, value text);
+CREATE RULE branch_rule_insert AS ON INSERT TO branch_rule_source
+DO INSTEAD
+    INSERT INTO branch_rule_target VALUES (NEW.id, NEW.value)
+    RETURNING id, value;
+INSERT INTO branch_rule_source VALUES (1, 'through-rule') RETURNING value;
+SELECT * FROM branch_rule_target;
+DROP TABLE branch_rule_source, branch_rule_target;
+
 CREATE TABLE parent_fk (id integer PRIMARY KEY);
 CREATE TABLE child_fk
 (

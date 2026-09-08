@@ -494,12 +494,14 @@ checkRuleResultList(List *targetList, TupleDesc resultDesc, bool isSelect,
 					bool requireColumnNameMatch)
 {
 	ListCell   *tllist;
-	int			i;
+	int			attno;
+	int			entryno;
 
 	/* Only a SELECT may require a column name match. */
 	Assert(isSelect || !requireColumnNameMatch);
 
-	i = 0;
+	attno = 0;
+	entryno = 0;
 	foreach(tllist, targetList)
 	{
 		TargetEntry *tle = (TargetEntry *) lfirst(tllist);
@@ -511,15 +513,18 @@ checkRuleResultList(List *targetList, TupleDesc resultDesc, bool isSelect,
 		/* resjunk entries may be ignored */
 		if (tle->resjunk)
 			continue;
-		i++;
-		if (i > resultDesc->natts)
+		entryno++;
+		while (attno < resultDesc->natts &&
+			   TupleDescAttr(resultDesc, attno)->attishidden)
+			attno++;
+		if (attno >= resultDesc->natts)
 			ereport(ERROR,
 					(errcode(ERRCODE_INVALID_OBJECT_DEFINITION),
 					 isSelect ?
 					 errmsg("SELECT rule's target list has too many entries") :
 					 errmsg("RETURNING list has too many entries")));
 
-		attr = TupleDescAttr(resultDesc, i - 1);
+		attr = TupleDescAttr(resultDesc, attno++);
 		attname = NameStr(attr->attname);
 
 		/*
@@ -552,7 +557,7 @@ checkRuleResultList(List *targetList, TupleDesc resultDesc, bool isSelect,
 			ereport(ERROR,
 					(errcode(ERRCODE_INVALID_OBJECT_DEFINITION),
 					 errmsg("SELECT rule's target entry %d has different column name from column \"%s\"",
-							i, attname),
+							entryno, attname),
 					 errdetail("SELECT target entry is named \"%s\".",
 							   tle->resname)));
 
@@ -563,9 +568,9 @@ checkRuleResultList(List *targetList, TupleDesc resultDesc, bool isSelect,
 					(errcode(ERRCODE_INVALID_OBJECT_DEFINITION),
 					 isSelect ?
 					 errmsg("SELECT rule's target entry %d has different type from column \"%s\"",
-							i, attname) :
+							entryno, attname) :
 					 errmsg("RETURNING list's entry %d has different type from column \"%s\"",
-							i, attname),
+							entryno, attname),
 					 isSelect ?
 					 errdetail("SELECT target entry has type %s, but column has type %s.",
 							   format_type_be(tletypid),
@@ -587,9 +592,9 @@ checkRuleResultList(List *targetList, TupleDesc resultDesc, bool isSelect,
 					(errcode(ERRCODE_INVALID_OBJECT_DEFINITION),
 					 isSelect ?
 					 errmsg("SELECT rule's target entry %d has different size from column \"%s\"",
-							i, attname) :
+							entryno, attname) :
 					 errmsg("RETURNING list's entry %d has different size from column \"%s\"",
-							i, attname),
+							entryno, attname),
 					 isSelect ?
 					 errdetail("SELECT target entry has type %s, but column has type %s.",
 							   format_type_with_typemod(tletypid, tletypmod),
@@ -601,7 +606,10 @@ checkRuleResultList(List *targetList, TupleDesc resultDesc, bool isSelect,
 														attr->atttypmod))));
 	}
 
-	if (i != resultDesc->natts)
+	while (attno < resultDesc->natts &&
+		   TupleDescAttr(resultDesc, attno)->attishidden)
+		attno++;
+	if (attno != resultDesc->natts)
 		ereport(ERROR,
 				(errcode(ERRCODE_INVALID_OBJECT_DEFINITION),
 				 isSelect ?
