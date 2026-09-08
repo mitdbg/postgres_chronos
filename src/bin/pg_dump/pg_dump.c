@@ -7316,6 +7316,7 @@ getTables(Archive *fout, int *numTables)
 	int			i_relacl;
 	int			i_acldefault;
 	int			i_ispartition;
+	bool		has_branch_relversion;
 
 	/*
 	 * Find all the tables and table-like objects.
@@ -7333,6 +7334,23 @@ getTables(Archive *fout, int *numTables)
 	 * (for instance, pg_get_partkeydef()).  Those are likely to fail or give
 	 * wrong answers if any concurrent DDL is happening.
 	 */
+
+	/*
+	 * A Chronos server records branch-local physical schema copies in
+	 * pg_branch_relversion.  Detect the catalog through standard catalogs so
+	 * this pg_dump binary remains usable with unmodified PostgreSQL servers.
+	 */
+	res = ExecuteSqlQueryForSingleRow(fout,
+								  "SELECT count(*) = 2 "
+								  "FROM pg_catalog.pg_class c "
+								  "JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace "
+								  "JOIN pg_catalog.pg_attribute a ON a.attrelid = c.oid "
+								  "WHERE n.nspname = 'pg_catalog' "
+								  "AND c.relname = 'pg_branch_relversion' "
+								  "AND a.attname IN ('brvlogical', 'brvphysical') "
+								  "AND a.attnum > 0 AND NOT a.attisdropped");
+	has_branch_relversion = (strcmp(PQgetvalue(res, 0, 0), "t") == 0);
+	PQclear(res);
 
 	appendPQExpBufferStr(query,
 						 "SELECT c.tableoid, c.oid, c.relname, "
@@ -7501,6 +7519,12 @@ getTables(Archive *fout, int *numTables)
 						 "AND NOT (c.relnamespace = (SELECT oid FROM pg_catalog.pg_namespace "
 						 "WHERE nspname = 'pg_catalog') AND "
 						 "c.relname = 'pg_branch_rowid_seq')\n");
+	if (has_branch_relversion)
+		appendPQExpBufferStr(query,
+							 "AND NOT EXISTS (SELECT 1 "
+							 "FROM pg_catalog.pg_branch_relversion brv "
+							 "WHERE brv.brvphysical = c.oid "
+							 "AND brv.brvlogical <> c.oid)\n");
 	appendPQExpBufferStr(query, "ORDER BY c.oid");
 
 	res = ExecuteSqlQuery(fout, query->data, PGRES_TUPLES_OK);
