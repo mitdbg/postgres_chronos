@@ -2953,7 +2953,8 @@ EvalPlanQualFetchRowMark(EPQState *epqstate, Index rti, TupleTableSlot *slot)
 		else
 		{
 			/* ordinary table, fetch the tuple */
-			if (BranchRelationIsVersioned(erm->relation))
+			if (BranchRelationIsVersioned(erm->relation) &&
+				!BranchRelationCanModifyInPlace(erm->relation))
 			{
 				ItemPointerData tid = *((ItemPointer) DatumGetPointer(datum));
 				bool		relocated;
