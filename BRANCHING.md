@@ -152,7 +152,8 @@ CREATE INDEX CONCURRENTLY accounts_note_idx ON accounts (note);
 ~~~
 
 The new column exists on `experiment` and descendants created from it
-afterward. It does not appear on `main`.
+afterward. It does not appear on `main`. Renaming a column follows the same
+branch-local schema-copy path.
 
 ~~~sql
 SET BRANCH main;
@@ -178,8 +179,9 @@ would affect another branch; apply a branch-local `ALTER TABLE` first if the
 index must be removed. `DROP TABLE` is accepted only for a base physical table
 when the selected branch is the database's sole active branch. Other table
 drops are rejected instead of deleting another branch's table or exposing an
-older physical schema. Relation creation, deletion, and rename do not yet
-provide complete branch-local schema semantics.
+older physical schema. Renaming a table is likewise accepted only for a base
+physical table in the sole active branch. Relation creation and table identity
+changes do not yet provide complete branch-local schema semantics.
 
 ## 6. Inspect branches
 

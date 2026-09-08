@@ -1008,7 +1008,10 @@ standard_ProcessUtility(PlannedStmt *pstmt,
 									   context, params, queryEnv,
 									   dest, qc);
 				else
+				{
+					BranchPrepareRename(stmt);
 					ExecRenameStmt(stmt);
+				}
 			}
 			break;
 
@@ -1829,6 +1832,7 @@ ProcessUtilitySlow(ParseState *pstate,
 				break;
 
 			case T_RenameStmt:
+				BranchPrepareRename((RenameStmt *) parsetree);
 				address = ExecRenameStmt((RenameStmt *) parsetree);
 				break;
 

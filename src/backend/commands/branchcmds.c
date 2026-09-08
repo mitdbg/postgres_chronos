@@ -1423,67 +1423,106 @@ branch_has_other_active_branch(void)
 
 /*
  * pg_class and dependency records are not branch-versioned.  Until relation
- * tombstones and dependencies are virtualized, reject physical table drops
- * that could remove another branch's table or uncover an inherited schema
- * version.  A base table is safe to drop when this is the database's sole
- * active branch.
+ * names and tombstones are virtualized, a physical identity change is safe
+ * only for a base table in the database's sole active branch.
  */
+static void
+branch_prepare_table_identity_change(RangeVar *rv, bool missing_ok,
+									 bool is_drop)
+{
+	Oid			relid;
+	Oid			logicaloid;
+	Oid			currentoid;
+	Relation	relation;
+	int			flags = missing_ok ? RVR_MISSING_OK : 0;
+
+	if (IsBootstrapProcessingMode() || !IsTransactionState() ||
+		!BranchDatabaseIsEnabled())
+		return;
+
+	/* Keep the resolved heap stable while joining the DDL lock order. */
+	relid = RangeVarGetRelidExtended(rv, AccessShareLock, flags, NULL, NULL);
+	if (!OidIsValid(relid))
+		return;
+	relation = relation_open(relid, NoLock);
+	if ((relation->rd_rel->relkind != RELKIND_RELATION &&
+		 relation->rd_rel->relkind != RELKIND_PARTITIONED_TABLE) ||
+		!BranchRelationIsVersioned(relation))
+	{
+		relation_close(relation, NoLock);
+		return;
+	}
+	relation_close(relation, NoLock);
+
+	logicaloid = BranchLogicalRelationOid(relid);
+	LockDatabaseObject(BranchRelVersionRelationId, logicaloid,
+					   BRANCH_DDL_LOCK_SUBID, ExclusiveLock);
+	BranchAcquireLock(RowExclusiveLock);
+	currentoid = branch_relation_for_point(logicaloid, &MyBranchPoint);
+	if (currentoid != relid)
+		ereport(ERROR,
+				(errcode(ERRCODE_UNDEFINED_TABLE),
+				 errmsg("table \"%s\" does not exist in branch \"%s\"",
+						rv->relname, branch_name)));
+	if (logicaloid != relid)
+	{
+		if (is_drop)
+			ereport(ERROR,
+					(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
+					 errmsg("cannot drop table \"%s\" from a branch-local schema version",
+							rv->relname),
+					 errdetail("Dropping the physical schema version would expose its inherited predecessor.")));
+		else
+			ereport(ERROR,
+					(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
+					 errmsg("cannot rename table \"%s\" from a branch-local schema version",
+							rv->relname),
+					 errdetail("The logical table name is shared by all database branches.")));
+	}
+	if (branch_has_other_active_branch())
+	{
+		if (is_drop)
+			ereport(ERROR,
+					(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
+					 errmsg("cannot drop table \"%s\" while other branches are active",
+							rv->relname),
+					 errdetail("Table catalog entries are shared by all database branches.")));
+		else
+			ereport(ERROR,
+					(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
+					 errmsg("cannot rename table \"%s\" while other branches are active",
+							rv->relname),
+					 errdetail("Table catalog entries are shared by all database branches.")));
+	}
+}
+
 void
 BranchPrepareDropTable(DropStmt *stmt)
 {
 	ListCell   *lc;
 
 	Assert(stmt->removeType == OBJECT_TABLE);
-	if (IsBootstrapProcessingMode() || !IsTransactionState() ||
-		!BranchDatabaseIsEnabled())
-		return;
-
 	foreach(lc, stmt->objects)
 	{
 		RangeVar   *rv = makeRangeVarFromNameList(lfirst(lc));
-		Oid			relid;
-		Oid			logicaloid;
-		Oid			currentoid;
-		Relation	relation;
 
-		/* Keep the resolved heap stable while joining the DDL lock order. */
-		relid = RangeVarGetRelidExtended(rv, AccessShareLock, RVR_MISSING_OK,
-										 NULL, NULL);
-		if (!OidIsValid(relid))
-			continue;
-		relation = relation_open(relid, NoLock);
-		if ((relation->rd_rel->relkind != RELKIND_RELATION &&
-			 relation->rd_rel->relkind != RELKIND_PARTITIONED_TABLE) ||
-			!BranchRelationIsVersioned(relation))
-		{
-			relation_close(relation, NoLock);
-			continue;
-		}
-		relation_close(relation, NoLock);
-
-		logicaloid = BranchLogicalRelationOid(relid);
-		LockDatabaseObject(BranchRelVersionRelationId, logicaloid,
-						   BRANCH_DDL_LOCK_SUBID, ExclusiveLock);
-		BranchAcquireLock(RowExclusiveLock);
-		currentoid = branch_relation_for_point(logicaloid, &MyBranchPoint);
-		if (currentoid != relid)
-			ereport(ERROR,
-					(errcode(ERRCODE_UNDEFINED_TABLE),
-					 errmsg("table \"%s\" does not exist in branch \"%s\"",
-							rv->relname, branch_name)));
-		if (logicaloid != relid)
-			ereport(ERROR,
-					(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
-					 errmsg("cannot drop table \"%s\" from a branch-local schema version",
-							rv->relname),
-					 errdetail("Dropping the physical schema version would expose its inherited predecessor.")));
-		if (branch_has_other_active_branch())
-			ereport(ERROR,
-					(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
-					 errmsg("cannot drop table \"%s\" while other branches are active",
-							rv->relname),
-					 errdetail("Table catalog entries are shared by all database branches.")));
+		branch_prepare_table_identity_change(rv, true, true);
 	}
+}
+
+/* Make contained column renames branch-local; guard global table names. */
+void
+BranchPrepareRename(RenameStmt *stmt)
+{
+	if (stmt->relation == NULL)
+		return;
+	if (stmt->renameType == OBJECT_COLUMN &&
+		stmt->relationType == OBJECT_TABLE)
+		(void) branch_prepare_relation_ddl(stmt->relation, stmt->missing_ok,
+										 false, NULL);
+	else if (stmt->renameType == OBJECT_TABLE)
+		branch_prepare_table_identity_change(stmt->relation, stmt->missing_ok,
+										 false);
 }
 
 void

@@ -203,6 +203,8 @@ CREATE TABLE schema_copy_target
 );
 CREATE INDEX schema_copy_target_value_idx ON schema_copy_target (value);
 INSERT INTO schema_copy_target VALUES (1, 'one'), (2, 'two');
+CREATE TABLE branch_rename_target (id integer PRIMARY KEY, value text);
+INSERT INTO branch_rename_target VALUES (1, 'main');
 CREATE TABLE branch_index_target
 (
     id integer,
@@ -523,6 +525,10 @@ UPDATE unlogged_target SET value = 'dev' WHERE id = 1;
 INSERT INTO unlogged_target VALUES (2, 'dev-only');
 SELECT * FROM unlogged_target ORDER BY id;
 
+ALTER TABLE branch_rename_target RENAME COLUMN value TO dev_value;
+SELECT * FROM branch_rename_target ORDER BY id;
+ALTER TABLE branch_rename_target RENAME TO branch_rename_target_dev;
+
 -- The first DDL on a shared physical schema copies visible rows.  Secondary
 -- indexes finish asynchronously; another DDL on the resulting private schema
 -- takes the native PostgreSQL fast path without creating another version.
@@ -695,6 +701,7 @@ FROM bulk_update_target WHERE value = 1;
 SELECT string_agg(column_name::text, ',' ORDER BY ordinal_position)
 FROM information_schema.columns
 WHERE table_name = 'schema_copy_target';
+SELECT * FROM branch_rename_target ORDER BY id;
 SELECT * FROM inherited_parent ORDER BY id;
 SELECT * FROM measurements ORDER BY id;
 SELECT * FROM created_after_fork ORDER BY id;
@@ -778,10 +785,14 @@ DROP TABLE branch_cached_read;
 CREATE TABLE branch_postdrop_private (id integer PRIMARY KEY);
 SELECT count(*) = 1 AS postdrop_creation_is_tracked
 FROM pg_branch_relversion;
-ALTER TABLE branch_postdrop_private ADD COLUMN value text;
+ALTER TABLE branch_postdrop_private RENAME TO branch_postdrop_private_renamed;
+SELECT to_regclass('branch_postdrop_private') IS NULL
+       AND to_regclass('branch_postdrop_private_renamed') IS NOT NULL
+       AS sole_branch_rename_succeeded;
+ALTER TABLE branch_postdrop_private_renamed ADD COLUMN value text;
 SELECT count(*) = 1 AS postdrop_alter_stayed_in_place
 FROM pg_branch_relversion;
-DROP TABLE branch_postdrop_private;
+DROP TABLE branch_postdrop_private_renamed;
 SELECT count(*) = 0 AS postdrop_metadata_was_removed
 FROM pg_branch_relversion;
 \connect regression
