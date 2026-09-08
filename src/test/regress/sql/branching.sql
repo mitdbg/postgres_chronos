@@ -83,6 +83,15 @@ CREATE TABLE branch_error_detail (id integer CHECK (id > 0));
 INSERT INTO branch_error_detail VALUES (-1);
 DROP TABLE branch_error_detail;
 
+CREATE TABLE branch_private_truncate (id integer);
+INSERT INTO branch_private_truncate VALUES (1);
+TRUNCATE branch_private_truncate;
+ALTER TABLE branch_private_truncate
+    ADD CONSTRAINT branch_private_truncate_negative CHECK (id < 0);
+INSERT INTO branch_private_truncate VALUES (-1);
+SELECT * FROM branch_private_truncate;
+DROP TABLE branch_private_truncate;
+
 CREATE TABLE parent_fk (id integer PRIMARY KEY);
 CREATE TABLE child_fk
 (

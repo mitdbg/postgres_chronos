@@ -2194,7 +2194,8 @@ ExecuteTruncateGuts(List *explicit_rels,
 		if (rel->rd_rel->relkind == RELKIND_PARTITIONED_TABLE)
 			continue;
 
-		if (BranchRelationIsVersioned(rel))
+		if (BranchRelationIsVersioned(rel) &&
+			!BranchRelationCanModifyInPlace(rel))
 		{
 			BranchTruncateRelation(rel);
 			pgstat_count_truncate(rel);
