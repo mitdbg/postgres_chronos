@@ -26,4 +26,5 @@ Chronos database branching
 This source tree implements Chronos interval-based database branching. See
 [BRANCHING.md](BRANCHING.md) for setup and everyday use. See
 [CHRONOS_VERSIONING.md](CHRONOS_VERSIONING.md) for the versioning algorithm and
-PostgreSQL implementation details.
+PostgreSQL implementation details. A Docker-compatible build is described in
+[docker/chronos/README.md](docker/chronos/README.md).
