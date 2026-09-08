@@ -72,6 +72,7 @@ extern bool BranchPrepareIndexStmt(IndexStmt *stmt);
 extern bool BranchPrepareDropIndex(DropStmt *stmt);
 extern void BranchPrepareDropTable(DropStmt *stmt);
 extern void BranchPrepareRename(RenameStmt *stmt);
+extern void BranchPrepareAlterObjectSchema(AlterObjectSchemaStmt *stmt);
 extern void BranchFinishIndexDDL(bool session_lock_held);
 extern PGDLLEXPORT void BranchIndexWorkerMain(Datum main_arg);
 extern PGDLLEXPORT void BranchGcWorkerMain(Datum main_arg);

@@ -1421,6 +1421,13 @@ branch_has_other_active_branch(void)
 	return found;
 }
 
+typedef enum BranchTableIdentityChange
+{
+	BRANCH_TABLE_DROP,
+	BRANCH_TABLE_RENAME,
+	BRANCH_TABLE_SET_SCHEMA,
+} BranchTableIdentityChange;
+
 /*
  * pg_class and dependency records are not branch-versioned.  Until relation
  * names and tombstones are virtualized, a physical identity change is safe
@@ -1428,7 +1435,7 @@ branch_has_other_active_branch(void)
  */
 static void
 branch_prepare_table_identity_change(RangeVar *rv, bool missing_ok,
-									 bool is_drop)
+									 BranchTableIdentityChange change)
 {
 	Oid			relid;
 	Oid			logicaloid;
@@ -1466,31 +1473,43 @@ branch_prepare_table_identity_change(RangeVar *rv, bool missing_ok,
 						rv->relname, branch_name)));
 	if (logicaloid != relid)
 	{
-		if (is_drop)
+		if (change == BRANCH_TABLE_DROP)
 			ereport(ERROR,
 					(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
 					 errmsg("cannot drop table \"%s\" from a branch-local schema version",
 							rv->relname),
 					 errdetail("Dropping the physical schema version would expose its inherited predecessor.")));
-		else
+		else if (change == BRANCH_TABLE_RENAME)
 			ereport(ERROR,
 					(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
 					 errmsg("cannot rename table \"%s\" from a branch-local schema version",
 							rv->relname),
 					 errdetail("The logical table name is shared by all database branches.")));
+		else
+			ereport(ERROR,
+					(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
+					 errmsg("cannot move table \"%s\" from a branch-local schema version",
+							rv->relname),
+					 errdetail("The logical table namespace is shared by all database branches.")));
 	}
 	if (branch_has_other_active_branch())
 	{
-		if (is_drop)
+		if (change == BRANCH_TABLE_DROP)
 			ereport(ERROR,
 					(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
 					 errmsg("cannot drop table \"%s\" while other branches are active",
 							rv->relname),
 					 errdetail("Table catalog entries are shared by all database branches.")));
-		else
+		else if (change == BRANCH_TABLE_RENAME)
 			ereport(ERROR,
 					(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
 					 errmsg("cannot rename table \"%s\" while other branches are active",
+							rv->relname),
+					 errdetail("Table catalog entries are shared by all database branches.")));
+		else
+			ereport(ERROR,
+					(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
+					 errmsg("cannot move table \"%s\" while other branches are active",
 							rv->relname),
 					 errdetail("Table catalog entries are shared by all database branches.")));
 	}
@@ -1506,7 +1525,7 @@ BranchPrepareDropTable(DropStmt *stmt)
 	{
 		RangeVar   *rv = makeRangeVarFromNameList(lfirst(lc));
 
-		branch_prepare_table_identity_change(rv, true, true);
+		branch_prepare_table_identity_change(rv, true, BRANCH_TABLE_DROP);
 	}
 }
 
@@ -1522,7 +1541,15 @@ BranchPrepareRename(RenameStmt *stmt)
 										 false, NULL);
 	else if (stmt->renameType == OBJECT_TABLE)
 		branch_prepare_table_identity_change(stmt->relation, stmt->missing_ok,
-										 false);
+										 BRANCH_TABLE_RENAME);
+}
+
+void
+BranchPrepareAlterObjectSchema(AlterObjectSchemaStmt *stmt)
+{
+	if (stmt->objectType == OBJECT_TABLE && stmt->relation != NULL)
+		branch_prepare_table_identity_change(stmt->relation, stmt->missing_ok,
+										 BRANCH_TABLE_SET_SCHEMA);
 }
 
 void

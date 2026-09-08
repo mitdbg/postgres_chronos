@@ -1037,7 +1037,10 @@ standard_ProcessUtility(PlannedStmt *pstmt,
 									   context, params, queryEnv,
 									   dest, qc);
 				else
+				{
+					BranchPrepareAlterObjectSchema(stmt);
 					ExecAlterObjectSchemaStmt(stmt, NULL);
+				}
 			}
 			break;
 
@@ -1843,6 +1846,7 @@ ProcessUtilitySlow(ParseState *pstate,
 				break;
 
 			case T_AlterObjectSchemaStmt:
+				BranchPrepareAlterObjectSchema((AlterObjectSchemaStmt *) parsetree);
 				address =
 					ExecAlterObjectSchemaStmt((AlterObjectSchemaStmt *) parsetree,
 											  &secondaryObject);

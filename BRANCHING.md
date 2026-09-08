@@ -180,8 +180,9 @@ index must be removed. `DROP TABLE` is accepted only for a base physical table
 when the selected branch is the database's sole active branch. Other table
 drops are rejected instead of deleting another branch's table or exposing an
 older physical schema. Renaming a table is likewise accepted only for a base
-physical table in the sole active branch. Relation creation and table identity
-changes do not yet provide complete branch-local schema semantics.
+physical table in the sole active branch, as is moving a table with `SET
+SCHEMA`. Relation creation and table identity changes do not yet provide
+complete branch-local schema semantics.
 
 ## 6. Inspect branches
 
