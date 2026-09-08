@@ -18216,8 +18216,8 @@ MergeAttributesIntoExisting(Relation child_rel, Relation parent_rel, bool ispart
 		char	   *parent_attname = NameStr(parent_att->attname);
 		HeapTuple	tuple;
 
-		/* Ignore dropped columns in the parent. */
-		if (parent_att->attisdropped)
+		/* Internal storage columns are not part of the inherited user schema. */
+		if (parent_att->attisdropped || parent_att->attishidden)
 			continue;
 
 		/* Find same column in child (matching on column name). */
