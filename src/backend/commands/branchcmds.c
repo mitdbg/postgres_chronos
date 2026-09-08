@@ -1130,17 +1130,19 @@ BranchPrepareAlterTable(AlterTableStmt *stmt, LOCKMODE lockmode)
 	/* The shared predecessor only needs to remain schema-stable while copied. */
 	sourcerelid = RangeVarGetRelid(stmt->relation, AccessShareLock, false);
 	logicalrelid = BranchLogicalRelationOid(sourcerelid);
-	sourcerel = table_open(sourcerelid, NoLock);
-	if (!BranchRelationIsVersioned(sourcerel))
+	sourcerel = relation_open(sourcerelid, NoLock);
+	if ((sourcerel->rd_rel->relkind != RELKIND_RELATION &&
+		 sourcerel->rd_rel->relkind != RELKIND_PARTITIONED_TABLE) ||
+		!BranchRelationIsVersioned(sourcerel))
 	{
-		table_close(sourcerel, NoLock);
+		relation_close(sourcerel, NoLock);
 		return;
 	}
 	ownerid = sourcerel->rd_rel->relowner;
 	if (!object_ownercheck(RelationRelationId, sourcerelid, GetUserId()))
 		aclcheck_error(ACLCHECK_NOT_OWNER, OBJECT_TABLE,
 					   RelationGetRelationName(sourcerel));
-	table_close(sourcerel, NoLock);
+	relation_close(sourcerel, NoLock);
 
 	branch_ensure_indexes_ready(sourcerelid);
 	if (branch_physical_version_is_private(logicalrelid, sourcerelid))

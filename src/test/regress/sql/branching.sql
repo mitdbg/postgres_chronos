@@ -184,6 +184,20 @@ BEGIN
 END
 $$;
 
+CREATE TYPE branch_alter_composite AS (first_value integer);
+ALTER TYPE branch_alter_composite ADD ATTRIBUTE second_value integer;
+SELECT count(*) = 2 AS composite_alter_uses_core_path
+FROM pg_attribute
+WHERE attrelid = 'branch_alter_composite'::regclass AND attnum > 0;
+DROP TYPE branch_alter_composite;
+
+CREATE INDEX accounts_balance_idx ON accounts ((balance + 1));
+ALTER INDEX accounts_balance_idx ALTER COLUMN 1 SET STATISTICS 100;
+SELECT attstattarget = 100 AS index_alter_uses_core_path
+FROM pg_attribute
+WHERE attrelid = 'accounts_balance_idx'::regclass AND attnum = 1;
+DROP INDEX accounts_balance_idx;
+
 SELECT count(*) AS hidden_before
 FROM pg_attribute
 WHERE attrelid IN ('accounts'::regclass,
