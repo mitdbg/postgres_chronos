@@ -4208,7 +4208,8 @@ lmerge_matched:
 					else
 						inputslot = resultRelInfo->ri_oldTupleSlot;
 
-					if (BranchRelationIsVersioned(resultRelationDesc))
+					if (BranchRelationIsVersioned(resultRelationDesc) &&
+						!BranchRelationCanModifyInPlace(resultRelationDesc))
 					{
 						int64		rowid;
 
