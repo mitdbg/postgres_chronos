@@ -511,10 +511,12 @@ branch_physical_version_is_private(Oid logicalrelid, Oid physicalrelid)
 {
 	if (logicalrelid == physicalrelid)
 	{
-		/* A split interval can never become the full interval again. */
-		return MyBranchLow.hi == 0 && MyBranchLow.lo == 0 &&
+		if (MyBranchLow.hi == 0 && MyBranchLow.lo == 0 &&
 			MyBranchHigh.hi == PG_UINT64_MAX &&
-			MyBranchHigh.lo == PG_UINT64_MAX;
+			MyBranchHigh.lo == PG_UINT64_MAX)
+			return true;
+
+		return branch_schema_version_is_private(logicalrelid, physicalrelid);
 	}
 
 	return branch_relation_for_point(logicalrelid,
@@ -2823,12 +2825,91 @@ branch_add_storage_index(Oid relid, const char *first, const char *second)
 	branch_process_utility((Node *) index);
 }
 
+/*
+ * A base relation created after the branch coordinate has been split cannot
+ * use the full-interval shortcut in branch_physical_version_is_private().
+ * When the creator is the only active branch, record the relation's exact
+ * creation interval.  This proves that the heap has never contained sibling
+ * rows without inspecting it.  A later fork changes the creator's bounds, so
+ * the same record cannot make a formerly shared heap private again.
+ */
+static void
+branch_record_private_base_version(Oid relid, Oid ownerid)
+{
+	Relation	branchrel;
+	Relation	versionrel;
+	TableScanDesc scan;
+	TupleTableSlot *slot;
+	bool		other_active = false;
+	Oid			versionid;
+	Datum		values[Natts_pg_branch_relversion];
+	bool		nulls[Natts_pg_branch_relversion];
+	HeapTuple	tuple;
+
+	BranchEnsureSession();
+	if (MyBranchLow.hi == 0 && MyBranchLow.lo == 0 &&
+		MyBranchHigh.hi == PG_UINT64_MAX &&
+		MyBranchHigh.lo == PG_UINT64_MAX)
+		return;
+
+	/* Serialize the proof with a fork from the creating branch. */
+	BranchAcquireLock(RowExclusiveLock);
+	branchrel = table_open(BranchRelationId, AccessShareLock);
+	scan = table_beginscan_catalog(branchrel, 0, NULL);
+	slot = table_slot_create(branchrel, NULL);
+	while (table_scan_getnextslot(scan, ForwardScanDirection, slot))
+	{
+		HeapTuple	branchtuple = ExecFetchSlotHeapTuple(slot, false, NULL);
+		Form_pg_branch branch = (Form_pg_branch) GETSTRUCT(branchtuple);
+
+		if (branch->brstate == BRANCH_STATE_ACTIVE &&
+			branch->oid != MyBranchId)
+		{
+			other_active = true;
+			break;
+		}
+		ExecClearTuple(slot);
+	}
+	ExecDropSingleTupleTableSlot(slot);
+	table_endscan(scan);
+	table_close(branchrel, AccessShareLock);
+	if (other_active)
+		return;
+
+	versionrel = table_open(BranchRelVersionRelationId, RowExclusiveLock);
+	versionid = GetNewOidWithIndex(versionrel, BranchRelVersionOidIndexId,
+								   Anum_pg_branch_relversion_oid);
+	MemSet(values, 0, sizeof(values));
+	MemSet(nulls, false, sizeof(nulls));
+	values[Anum_pg_branch_relversion_oid - 1] = ObjectIdGetDatum(versionid);
+	values[Anum_pg_branch_relversion_brvlogical - 1] = ObjectIdGetDatum(relid);
+	values[Anum_pg_branch_relversion_brvphysical - 1] = ObjectIdGetDatum(relid);
+	values[Anum_pg_branch_relversion_brvsource - 1] = ObjectIdGetDatum(relid);
+	values[Anum_pg_branch_relversion_brvbranch - 1] =
+		ObjectIdGetDatum(MyBranchId);
+	values[Anum_pg_branch_relversion_brvowner - 1] = ObjectIdGetDatum(ownerid);
+	values[Anum_pg_branch_relversion_brvlow - 1] =
+		BranchCoordinatePGetDatum(&MyBranchLow);
+	values[Anum_pg_branch_relversion_brvhigh - 1] =
+		BranchCoordinatePGetDatum(&MyBranchHigh);
+	values[Anum_pg_branch_relversion_brvcreated - 1] =
+		Int64GetDatum(GetCurrentTimestamp());
+	values[Anum_pg_branch_relversion_brvindexstate - 1] =
+		CharGetDatum(BRANCH_INDEX_STATE_READY);
+	tuple = heap_form_tuple(RelationGetDescr(versionrel), values, nulls);
+	CatalogTupleInsert(versionrel, tuple);
+	heap_freetuple(tuple);
+	table_close(versionrel, RowExclusiveLock);
+	CommandCounterIncrement();
+}
+
 /* Add the mandatory indexes after CREATE TABLE has assigned the table OID. */
 void
 BranchCreateStorageIndexes(Oid relid)
 {
 	Relation	relation;
 	char		relkind;
+	Oid			ownerid;
 	bool		versioned;
 
 	if (BranchSchemaCopyDepth > 0 || !BranchDatabaseIsEnabled())
@@ -2836,16 +2917,43 @@ BranchCreateStorageIndexes(Oid relid)
 
 	relation = table_open(relid, AccessShareLock);
 	relkind = relation->rd_rel->relkind;
+	ownerid = relation->rd_rel->relowner;
 	versioned = BranchRelationIsVersioned(relation);
 	table_close(relation, AccessShareLock);
+	if (versioned)
+		branch_record_private_base_version(relid, ownerid);
 	/* Partitioned roots contain no tuples; their leaf indexes do the work. */
 	if (!versioned || relkind != RELKIND_RELATION)
 		return;
 
 	branch_add_storage_index(relid, BRANCH_ROWID_ATTRIBUTE_NAME,
-							 BRANCH_LOW_ATTRIBUTE_NAME);
+								 BRANCH_LOW_ATTRIBUTE_NAME);
 	branch_add_storage_index(relid, BRANCH_WRITER_ATTRIBUTE_NAME,
-							 BRANCH_ROWID_ATTRIBUTE_NAME);
+								 BRANCH_ROWID_ATTRIBUTE_NAME);
+}
+
+/* Remove the binding before its physical relation leaves pg_class. */
+void
+BranchForgetPhysicalRelation(Oid relid)
+{
+	Relation	relation;
+	SysScanDesc scan;
+	ScanKeyData key;
+	HeapTuple	tuple;
+
+	if (IsBootstrapProcessingMode() || !IsTransactionState() ||
+		!BranchDatabaseIsEnabled())
+		return;
+
+	relation = table_open(BranchRelVersionRelationId, RowExclusiveLock);
+	ScanKeyInit(&key, Anum_pg_branch_relversion_brvphysical,
+				BTEqualStrategyNumber, F_OIDEQ, ObjectIdGetDatum(relid));
+	scan = systable_beginscan(relation, BranchRelVersionPhysicalIndexId, true,
+							 NULL, 1, &key);
+	while (HeapTupleIsValid(tuple = systable_getnext(scan)))
+		CatalogTupleDelete(relation, &tuple->t_self);
+	systable_endscan(scan);
+	table_close(relation, RowExclusiveLock);
 }
 
 /*

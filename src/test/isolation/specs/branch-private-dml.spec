@@ -4,6 +4,8 @@
 
 setup
 {
+  CREATE BRANCH branch_private_activation;
+  DROP BRANCH branch_private_activation;
   CREATE TABLE branch_private_target (id integer PRIMARY KEY, value text);
   CREATE TABLE branch_private_ddl_target (id integer PRIMARY KEY);
   INSERT INTO branch_private_target VALUES (1, 'before');

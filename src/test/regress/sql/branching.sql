@@ -712,5 +712,15 @@ DEALLOCATE branch_cached_plan;
 SET BRANCH main;
 DROP BRANCH branch_cached_child;
 DROP TABLE branch_cached_read;
+DROP BRANCH activation_child;
+CREATE TABLE branch_postdrop_private (id integer PRIMARY KEY);
+SELECT count(*) = 1 AS postdrop_creation_is_tracked
+FROM pg_branch_relversion;
+ALTER TABLE branch_postdrop_private ADD COLUMN value text;
+SELECT count(*) = 1 AS postdrop_alter_stayed_in_place
+FROM pg_branch_relversion;
+DROP TABLE branch_postdrop_private;
+SELECT count(*) = 0 AS postdrop_metadata_was_removed
+FROM pg_branch_relversion;
 \connect regression
 DROP DATABASE regression_branch_default;

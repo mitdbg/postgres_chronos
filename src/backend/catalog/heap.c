@@ -54,6 +54,7 @@
 #include "catalog/pg_tablespace.h"
 #include "catalog/pg_type.h"
 #include "catalog/storage.h"
+#include "commands/branchcmds.h"
 #include "commands/tablecmds.h"
 #include "commands/typecmds.h"
 #include "common/int.h"
@@ -1854,6 +1855,7 @@ heap_drop_with_catalog(Oid relid)
 	 * our own session.
 	 */
 	CheckTableNotInUse(rel, "DROP TABLE");
+	BranchForgetPhysicalRelation(relid);
 
 	/*
 	 * This effectively deletes all rows in the table, and may be done in a

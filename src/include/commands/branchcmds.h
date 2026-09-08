@@ -45,6 +45,7 @@ extern bool BranchRelationCanModifyInPlace(Relation relation);
 extern bool BranchRelationCanReadInPlace(Relation relation);
 extern bool BranchSchemaCopyInProgress(void);
 extern void BranchCreateStorageIndexes(Oid relid);
+extern void BranchForgetPhysicalRelation(Oid relid);
 extern bool BranchTupleSlotIsVisible(Relation relation, TupleTableSlot *slot);
 extern int64 BranchTupleRowId(Relation relation, TupleTableSlot *slot);
 extern void BranchLockRowIdentity(Relation relation, int64 rowid);
