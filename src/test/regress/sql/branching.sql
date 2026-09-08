@@ -68,6 +68,17 @@ INSERT INTO branch_rule_source VALUES (1, 'through-rule') RETURNING value;
 SELECT * FROM branch_rule_target;
 DROP TABLE branch_rule_source, branch_rule_target;
 
+CREATE TABLE branch_like_source (id integer, value text);
+CREATE INDEX branch_like_value_idx ON branch_like_source (value);
+CREATE TABLE branch_like_copy (LIKE branch_like_source INCLUDING ALL);
+SELECT count(*) FILTER (WHERE NOT a1.attishidden) AS copied_user_indexes,
+       count(*) FILTER (WHERE a1.attishidden) AS storage_indexes
+FROM pg_index i
+JOIN pg_attribute a1 ON a1.attrelid = i.indrelid
+                     AND a1.attnum = i.indkey[0]
+WHERE i.indrelid = 'branch_like_copy'::regclass;
+DROP TABLE branch_like_source, branch_like_copy;
+
 CREATE TABLE parent_fk (id integer PRIMARY KEY);
 CREATE TABLE child_fk
 (

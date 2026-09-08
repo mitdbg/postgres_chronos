@@ -1502,7 +1502,7 @@ expandTableLikeClause(RangeVar *heapRel, TableLikeClause *table_like_clause)
 			/*
 			 * Ignore dropped columns in the parent.
 			 */
-			if (attribute->attisdropped)
+			if (attribute->attisdropped || attribute->attishidden)
 				continue;
 
 			/*
@@ -1671,8 +1671,25 @@ expandTableLikeClause(RangeVar *heapRel, TableLikeClause *table_like_clause)
 			Oid			parent_index_oid = lfirst_oid(l);
 			Relation	parent_index;
 			IndexStmt  *index_stmt;
+			bool		storage_index = true;
 
 			parent_index = index_open(parent_index_oid, AccessShareLock);
+			for (int i = 0; i < parent_index->rd_index->indnkeyatts; i++)
+			{
+				AttrNumber	attnum = parent_index->rd_index->indkey.values[i];
+
+				if (attnum <= 0 ||
+					!TupleDescAttr(tupleDesc, attnum - 1)->attishidden)
+				{
+					storage_index = false;
+					break;
+				}
+			}
+			if (storage_index)
+			{
+				index_close(parent_index, AccessShareLock);
+				continue;
+			}
 
 			/* Build CREATE INDEX statement to recreate the parent_index */
 			index_stmt = generateClonedIndexStmt(heapRel,

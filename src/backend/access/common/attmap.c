@@ -219,6 +219,30 @@ build_attrmap_by_name(TupleDesc indesc,
 
 		if (outatt->attisdropped)
 			continue;			/* attrMap->attnums[i] is already 0 */
+		if (outatt->attishidden)
+		{
+			for (j = 0; j < innatts; j++)
+			{
+				Form_pg_attribute inatt = TupleDescAttr(indesc, j);
+
+				if (inatt->attisdropped || !inatt->attishidden ||
+					strcmp(NameStr(outatt->attname),
+						   NameStr(inatt->attname)) != 0)
+					continue;
+				if (outatt->atttypid != inatt->atttypid ||
+					outatt->atttypmod != inatt->atttypmod)
+					ereport(ERROR,
+							(errcode(ERRCODE_DATATYPE_MISMATCH),
+							 errmsg("could not convert row type"),
+							 errdetail("Attribute \"%s\" of type %s does not match corresponding attribute of type %s.",
+									   NameStr(outatt->attname),
+									   format_type_be(outdesc->tdtypeid),
+									   format_type_be(indesc->tdtypeid))));
+				attrMap->attnums[i] = inatt->attnum;
+				break;
+			}
+			continue;
+		}
 		attname = NameStr(outatt->attname);
 		atttypid = outatt->atttypid;
 		atttypmod = outatt->atttypmod;
@@ -243,7 +267,7 @@ build_attrmap_by_name(TupleDesc indesc,
 				nextindesc = 0;
 
 			inatt = TupleDescAttr(indesc, nextindesc);
-			if (inatt->attisdropped)
+			if (inatt->attisdropped || inatt->attishidden)
 				continue;
 			if (strcmp(attname, NameStr(inatt->attname)) == 0)
 			{
