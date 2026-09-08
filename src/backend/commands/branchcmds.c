@@ -1127,7 +1127,10 @@ BranchPrepareAlterTable(AlterTableStmt *stmt, LOCKMODE lockmode)
 		return;
 
 	/* The predecessor only needs to remain schema-stable while inspected. */
-	sourcerelid = RangeVarGetRelid(stmt->relation, AccessShareLock, false);
+	sourcerelid = RangeVarGetRelid(stmt->relation, AccessShareLock,
+								stmt->missing_ok);
+	if (!OidIsValid(sourcerelid))
+		return;
 	logicalrelid = BranchLogicalRelationOid(sourcerelid);
 	sourcerel = relation_open(sourcerelid, NoLock);
 	if ((sourcerel->rd_rel->relkind != RELKIND_RELATION &&

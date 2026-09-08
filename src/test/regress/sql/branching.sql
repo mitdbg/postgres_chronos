@@ -125,6 +125,8 @@ ALTER TABLE branch_typed_table NOT OF;
 DROP TABLE branch_typed_table;
 DROP TYPE branch_typed_row;
 
+ALTER TABLE IF EXISTS branch_missing_table ADD COLUMN value integer;
+
 CREATE TABLE parent_fk (id integer PRIMARY KEY);
 CREATE TABLE child_fk
 (
