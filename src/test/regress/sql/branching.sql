@@ -99,6 +99,15 @@ CREATE PROPERTY GRAPH branch_property_graph
 DROP PROPERTY GRAPH branch_property_graph;
 DROP TABLE branch_graph_vertex;
 
+CREATE TABLE branch_parallel_source AS
+SELECT g AS id FROM generate_series(1, 100) AS g;
+SET debug_parallel_query = on;
+CREATE TABLE branch_parallel_copy AS
+SELECT * FROM branch_parallel_source;
+RESET debug_parallel_query;
+SELECT count(*) AS parallel_copy_rows FROM branch_parallel_copy;
+DROP TABLE branch_parallel_source, branch_parallel_copy;
+
 CREATE TABLE parent_fk (id integer PRIMARY KEY);
 CREATE TABLE child_fk
 (

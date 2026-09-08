@@ -16,6 +16,7 @@
 
 #include "access/htup_details.h"
 #include "access/multixact.h"
+#include "access/parallel.h"
 #include "access/relation.h"
 #include "access/sequence.h"
 #include "access/table.h"
@@ -93,6 +94,8 @@ static void create_seq_hashtable(void);
 static void init_sequence(Oid relid, SeqTable *p_elm, Relation *p_rel);
 static Form_pg_sequence_data read_seq_tuple(Relation rel,
 											Buffer *buf, HeapTuple seqdatatuple);
+static int64 nextval_internal_common(Oid relid, bool check_permissions,
+									  bool allow_parallel_leader);
 static void init_params(ParseState *pstate, List *options, bool for_identity,
 						bool isInit,
 						Form_pg_sequence seqform,
@@ -623,6 +626,28 @@ nextval_oid(PG_FUNCTION_ARGS)
 int64
 nextval_internal(Oid relid, bool check_permissions)
 {
+	return nextval_internal_common(relid, check_permissions, false);
+}
+
+/*
+ * Allocate from an internal sequence in the parallel leader.  The caller
+ * must guarantee that cooperating workers never touch this sequence.  This
+ * exception is needed for leader-owned tuple destinations such as CTAS.
+ */
+int64
+nextval_internal_parallel_leader(Oid relid, bool check_permissions)
+{
+	if (IsParallelWorker())
+		ereport(ERROR,
+				(errcode(ERRCODE_INVALID_TRANSACTION_STATE),
+				 errmsg("cannot allocate an internal sequence value in a parallel worker")));
+	return nextval_internal_common(relid, check_permissions, true);
+}
+
+static int64
+nextval_internal_common(Oid relid, bool check_permissions,
+						bool allow_parallel_leader)
+{
 	SeqTable	elm;
 	Relation	seqrel;
 	Buffer		buf;
@@ -664,7 +689,8 @@ nextval_internal(Oid relid, bool check_permissions)
 	 * cooperating backends would need to share the backend-local cached
 	 * sequence information.  Currently, we don't support that.
 	 */
-	PreventCommandIfParallelMode("nextval()");
+	if (!allow_parallel_leader)
+		PreventCommandIfParallelMode("nextval()");
 
 	if (elm->last != elm->cached)	/* some numbers were cached */
 	{

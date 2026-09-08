@@ -39,6 +39,8 @@ typedef FormData_pg_sequence_data *Form_pg_sequence_data;
 #define SEQ_COL_LASTCOL			SEQ_COL_CALLED
 
 extern int64 nextval_internal(Oid relid, bool check_permissions);
+extern int64 nextval_internal_parallel_leader(Oid relid,
+											 bool check_permissions);
 extern Datum nextval(PG_FUNCTION_ARGS);
 extern List *sequence_options(Oid relid);
 

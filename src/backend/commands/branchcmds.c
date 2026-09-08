@@ -1217,7 +1217,7 @@ BranchNextRowId(void)
 	seqid = get_relname_relid("pg_branch_rowid_seq", PG_CATALOG_NAMESPACE);
 	if (!OidIsValid(seqid))
 		elog(ERROR, "native branching row identity sequence is missing");
-	return nextval_internal(seqid, false);
+	return nextval_internal_parallel_leader(seqid, false);
 }
 
 Datum
