@@ -309,7 +309,7 @@ rewrite, executor, table access, and index enforcement boundaries.
 | Record writes | `execMain.c`, `nodeModifyTable.c`, `nodeLockRows.c`, and `trigger.c` add branch locks, interval splitting, private DML, and tuple relocation |
 | Table operations | `tableam.c`, `copy*.c`, `createas.c`, `tablecmds.c`, and `parse_utilcmd.c` cover branch-aware probes, COPY, CTAS, TRUNCATE, and new tables |
 | Constraints | `nbtinsert.c`, `nbtsort.c`, `index.c`, `execIndexing.c`, and `ri_triggers.c` enforce unique, exclusion, and foreign-key semantics |
-| Hidden attributes | `pg_attribute.h`, `htup_details.h`, parser and tuple descriptor code, row and JSON conversion, `information_schema.sql`, and `system_views.sql` hide engine metadata |
+| Hidden attributes | `pg_attribute.h`, `htup_details.h`, parser and tuple descriptor code, row and JSON conversion, `information_schema.sql`, and `system_views.sql` hide engine metadata, including its planner statistics |
 | Client tools | `psql/describe.c` and `pg_dump.c` omit hidden attributes and internal support indexes from normal output |
 | Workers | `bgworker.c` exposes the in-core entry points used for secondary index construction and branch deletion |
 

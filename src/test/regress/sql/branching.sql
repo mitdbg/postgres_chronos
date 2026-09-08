@@ -13,6 +13,10 @@ CREATE TABLE accounts
 INSERT INTO accounts VALUES
     (1, 'one@example.test', 10),
     (2, 'two@example.test', 20);
+ANALYZE accounts;
+SELECT count(*) = 3 AS stats_hide_metadata
+FROM pg_stats
+WHERE schemaname = 'public' AND tablename = 'accounts';
 SELECT (ROW(3, 'three@example.test', 30)::accounts).email
        AS record_cast_hides_metadata;
 CREATE FUNCTION make_account(integer, text, integer) RETURNS accounts
