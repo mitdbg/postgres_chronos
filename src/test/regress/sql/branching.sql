@@ -108,6 +108,16 @@ RESET debug_parallel_query;
 SELECT count(*) AS parallel_copy_rows FROM branch_parallel_copy;
 DROP TABLE branch_parallel_source, branch_parallel_copy;
 
+CREATE ROLE branch_column_reader;
+CREATE TABLE branch_acl_row (id integer, value text);
+INSERT INTO branch_acl_row VALUES (1, 'visible');
+GRANT SELECT (id, value) ON branch_acl_row TO branch_column_reader;
+SET ROLE branch_column_reader;
+SELECT branch_acl_row FROM branch_acl_row;
+RESET ROLE;
+DROP TABLE branch_acl_row;
+DROP ROLE branch_column_reader;
+
 CREATE TABLE parent_fk (id integer PRIMARY KEY);
 CREATE TABLE child_fk
 (

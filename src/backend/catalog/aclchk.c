@@ -3953,12 +3953,12 @@ pg_attribute_aclcheck_ext(Oid table_oid, AttrNumber attnum,
  * Exported routine for checking a user's access privileges to any/all columns
  *
  * If 'how' is ACLMASK_ANY, then returns ACLCHECK_OK if user has any of the
- * privileges identified by 'mode' on any non-dropped column in the relation;
+ * privileges identified by 'mode' on any user-visible column in the relation;
  * otherwise returns a suitable error code (in practice, always
  * ACLCHECK_NO_PRIV).
  *
  * If 'how' is ACLMASK_ALL, then returns ACLCHECK_OK if user has any of the
- * privileges identified by 'mode' on each non-dropped column in the relation
+ * privileges identified by 'mode' on each user-visible column in the relation
  * (and there must be at least one such column); otherwise returns a suitable
  * error code (in practice, always ACLCHECK_NO_PRIV).
  *
@@ -4042,8 +4042,9 @@ pg_attribute_aclcheck_all_ext(Oid table_oid, Oid roleid,
 		if (!HeapTupleIsValid(attTuple))
 			continue;
 
-		/* ignore dropped columns */
-		if (((Form_pg_attribute) GETSTRUCT(attTuple))->attisdropped)
+		/* Ignore columns that are not part of the user-visible row. */
+		if (((Form_pg_attribute) GETSTRUCT(attTuple))->attisdropped ||
+			((Form_pg_attribute) GETSTRUCT(attTuple))->attishidden)
 		{
 			ReleaseSysCache(attTuple);
 			continue;
