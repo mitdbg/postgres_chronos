@@ -3350,7 +3350,8 @@ ExecOnConflictLockRow(ModifyTableContext *context,
 	 * make the caller redo conflict detection: a same-branch update might also
 	 * have changed the indexed key and invalidated the original conflict.
 	 */
-	if (BranchRelationIsVersioned(relation))
+	if (BranchRelationIsVersioned(relation) &&
+		!BranchRelationCanModifyInPlace(relation))
 	{
 		if (!BranchResolveTupleForUpdate(relation, &lockTid, existing,
 										 &relocated))
@@ -3628,7 +3629,8 @@ ExecOnConflictSelect(ModifyTableContext *context,
 	/* Fetch/lock existing tuple, according to the requested lock strength */
 	if (lockStrength == LCS_NONE)
 	{
-		if (BranchRelationIsVersioned(relation))
+		if (BranchRelationIsVersioned(relation) &&
+			!BranchRelationCanModifyInPlace(relation))
 		{
 			ItemPointerData resolvedTid = *conflictTid;
 			bool		relocated;
