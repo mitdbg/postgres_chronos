@@ -175,7 +175,10 @@ error if it overlaps that build.
 `DROP INDEX` is accepted when the selected branch owns a private physical
 table. It is rejected on a shared table, where dropping the physical index
 would affect another branch; apply a branch-local `ALTER TABLE` first if the
-index must be removed. Relation creation, deletion, and rename do not yet
+index must be removed. `DROP TABLE` is accepted only for a base physical table
+when the selected branch is the database's sole active branch. Other table
+drops are rejected instead of deleting another branch's table or exposing an
+older physical schema. Relation creation, deletion, and rename do not yet
 provide complete branch-local schema semantics.
 
 ## 6. Inspect branches

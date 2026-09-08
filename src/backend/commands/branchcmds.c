@@ -1386,6 +1386,106 @@ BranchPrepareDropIndex(DropStmt *stmt)
 	return session_lock_held;
 }
 
+/*
+ * Return whether another live branch can resolve global relation names.
+ * The caller holds MyBranchId's branch lock, so a sole active branch cannot
+ * acquire a new sibling between this check and the physical DROP.
+ */
+static bool
+branch_has_other_active_branch(void)
+{
+	Relation	relation;
+	TableScanDesc scan;
+	TupleTableSlot *slot;
+	bool		found = false;
+
+	relation = table_open(BranchRelationId, AccessShareLock);
+	scan = table_beginscan_catalog(relation, 0, NULL);
+	slot = table_slot_create(relation, NULL);
+	while (table_scan_getnextslot(scan, ForwardScanDirection, slot))
+	{
+		HeapTuple	tuple = ExecFetchSlotHeapTuple(slot, false, NULL);
+		Form_pg_branch branch = (Form_pg_branch) GETSTRUCT(tuple);
+
+		if (branch->brstate == BRANCH_STATE_ACTIVE &&
+			branch->oid != MyBranchId)
+		{
+			found = true;
+			break;
+		}
+		ExecClearTuple(slot);
+	}
+	ExecDropSingleTupleTableSlot(slot);
+	table_endscan(scan);
+	table_close(relation, AccessShareLock);
+	return found;
+}
+
+/*
+ * pg_class and dependency records are not branch-versioned.  Until relation
+ * tombstones and dependencies are virtualized, reject physical table drops
+ * that could remove another branch's table or uncover an inherited schema
+ * version.  A base table is safe to drop when this is the database's sole
+ * active branch.
+ */
+void
+BranchPrepareDropTable(DropStmt *stmt)
+{
+	ListCell   *lc;
+
+	Assert(stmt->removeType == OBJECT_TABLE);
+	if (IsBootstrapProcessingMode() || !IsTransactionState() ||
+		!BranchDatabaseIsEnabled())
+		return;
+
+	foreach(lc, stmt->objects)
+	{
+		RangeVar   *rv = makeRangeVarFromNameList(lfirst(lc));
+		Oid			relid;
+		Oid			logicaloid;
+		Oid			currentoid;
+		Relation	relation;
+
+		/* Keep the resolved heap stable while joining the DDL lock order. */
+		relid = RangeVarGetRelidExtended(rv, AccessShareLock, RVR_MISSING_OK,
+										 NULL, NULL);
+		if (!OidIsValid(relid))
+			continue;
+		relation = relation_open(relid, NoLock);
+		if ((relation->rd_rel->relkind != RELKIND_RELATION &&
+			 relation->rd_rel->relkind != RELKIND_PARTITIONED_TABLE) ||
+			!BranchRelationIsVersioned(relation))
+		{
+			relation_close(relation, NoLock);
+			continue;
+		}
+		relation_close(relation, NoLock);
+
+		logicaloid = BranchLogicalRelationOid(relid);
+		LockDatabaseObject(BranchRelVersionRelationId, logicaloid,
+						   BRANCH_DDL_LOCK_SUBID, ExclusiveLock);
+		BranchAcquireLock(RowExclusiveLock);
+		currentoid = branch_relation_for_point(logicaloid, &MyBranchPoint);
+		if (currentoid != relid)
+			ereport(ERROR,
+					(errcode(ERRCODE_UNDEFINED_TABLE),
+					 errmsg("table \"%s\" does not exist in branch \"%s\"",
+							rv->relname, branch_name)));
+		if (logicaloid != relid)
+			ereport(ERROR,
+					(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
+					 errmsg("cannot drop table \"%s\" from a branch-local schema version",
+							rv->relname),
+					 errdetail("Dropping the physical schema version would expose its inherited predecessor.")));
+		if (branch_has_other_active_branch())
+			ereport(ERROR,
+					(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
+					 errmsg("cannot drop table \"%s\" while other branches are active",
+							rv->relname),
+					 errdetail("Table catalog entries are shared by all database branches.")));
+	}
+}
+
 void
 BranchFinishIndexDDL(bool session_lock_held)
 {

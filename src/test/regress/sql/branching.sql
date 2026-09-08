@@ -529,6 +529,9 @@ SELECT * FROM unlogged_target ORDER BY id;
 SELECT last_value AS rowid_before_schema_copy
 FROM pg_catalog.pg_branch_rowid_seq \gset
 ALTER TABLE schema_copy_target ADD COLUMN dev_only integer DEFAULT 9;
+-- Removing the copy would uncover the inherited schema, so reject it until
+-- relation tombstones are versioned too.
+DROP TABLE schema_copy_target;
 SELECT last_value = :rowid_before_schema_copy AS copied_rowids_preserved
 FROM pg_catalog.pg_branch_rowid_seq;
 SELECT * FROM schema_copy_target ORDER BY id;
@@ -768,8 +771,10 @@ EXECUTE branch_cached_plan;
 DEALLOCATE branch_cached_plan;
 SET BRANCH main;
 DROP BRANCH branch_cached_child;
+-- activation_child still resolves global pg_class names.
 DROP TABLE branch_cached_read;
 DROP BRANCH activation_child;
+DROP TABLE branch_cached_read;
 CREATE TABLE branch_postdrop_private (id integer PRIMARY KEY);
 SELECT count(*) = 1 AS postdrop_creation_is_tracked
 FROM pg_branch_relversion;

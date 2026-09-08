@@ -1,0 +1,22 @@
+Parsed test spec with 3 sessions
+
+starting permutation: lock_begin lock_table drop_table fork_child lock_commit set_child table_absent
+step lock_begin: BEGIN;
+step lock_table: 
+  LOCK TABLE branch_drop_table_target IN ACCESS SHARE MODE;
+
+step drop_table: DROP TABLE branch_drop_table_target; <waiting ...>
+step fork_child: CREATE BRANCH branch_drop_table_child FROM main; <waiting ...>
+step lock_commit: COMMIT; <waiting ...>
+step drop_table: <... completed>
+step fork_child: <... completed>
+step set_child: SET BRANCH branch_drop_table_child;
+step lock_commit: <... completed>
+step table_absent: 
+  SELECT to_regclass('branch_drop_table_target') IS NULL AS table_absent;
+
+table_absent
+------------
+t           
+(1 row)
+

@@ -1819,6 +1819,8 @@ ProcessUtilitySlow(ParseState *pstate,
 
 					if (stmt->removeType == OBJECT_INDEX && isCompleteQuery)
 						branch_session_lock = BranchPrepareDropIndex(stmt);
+					else if (stmt->removeType == OBJECT_TABLE && isCompleteQuery)
+						BranchPrepareDropTable(stmt);
 					ExecDropStmt(stmt, isTopLevel);
 					BranchFinishIndexDDL(branch_session_lock);
 				}

@@ -136,3 +136,4 @@ test: branch-create-concurrent
 test: branch-drop-concurrent
 test: branch-private-dml
 test: branch-index-concurrent
+test: branch-drop-table-concurrent

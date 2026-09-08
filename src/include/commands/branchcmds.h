@@ -70,6 +70,7 @@ extern Datum pg_branch_relation_is_current(PG_FUNCTION_ARGS);
 extern void BranchPrepareAlterTable(AlterTableStmt *stmt, LOCKMODE lockmode);
 extern bool BranchPrepareIndexStmt(IndexStmt *stmt);
 extern bool BranchPrepareDropIndex(DropStmt *stmt);
+extern void BranchPrepareDropTable(DropStmt *stmt);
 extern void BranchFinishIndexDDL(bool session_lock_held);
 extern PGDLLEXPORT void BranchIndexWorkerMain(Datum main_arg);
 extern PGDLLEXPORT void BranchGcWorkerMain(Datum main_arg);
