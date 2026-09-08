@@ -1609,7 +1609,7 @@ expand_all_col_privileges(Oid table_oid, Form_pg_class classForm,
 		 curr_att++)
 	{
 		HeapTuple	attTuple;
-		bool		isdropped;
+		Form_pg_attribute attribute;
 
 		if (curr_att == InvalidAttrNumber)
 			continue;
@@ -1625,13 +1625,16 @@ expand_all_col_privileges(Oid table_oid, Form_pg_class classForm,
 			elog(ERROR, "cache lookup failed for attribute %d of relation %u",
 				 curr_att, table_oid);
 
-		isdropped = ((Form_pg_attribute) GETSTRUCT(attTuple))->attisdropped;
+		attribute = (Form_pg_attribute) GETSTRUCT(attTuple);
+
+		/* Ignore columns that users cannot name or grant privileges on. */
+		if (attribute->attisdropped || attribute->attishidden)
+		{
+			ReleaseSysCache(attTuple);
+			continue;
+		}
 
 		ReleaseSysCache(attTuple);
-
-		/* ignore dropped columns */
-		if (isdropped)
-			continue;
 
 		col_privileges[curr_att - FirstLowInvalidHeapAttributeNumber] |= this_privileges;
 	}
