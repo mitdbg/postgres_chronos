@@ -241,6 +241,21 @@ get_relation_info(PlannerInfo *root, Oid relationObjectId, bool inhparent,
 			index = indexRelation->rd_index;
 
 			/*
+			 * Indexes led by an engine-hidden column support branch maintenance,
+			 * not SQL query paths.  In particular, treating the writer/row-id
+			 * index as a covering index can replace a cheaper user index or heap
+			 * scan even though no visible expression references its keys.  The
+			 * branch executor opens these indexes directly when it needs them.
+			 */
+			if (index->indnkeyatts > 0 && index->indkey.values[0] > 0 &&
+				TupleDescAttr(RelationGetDescr(relation),
+							  index->indkey.values[0] - 1)->attishidden)
+			{
+				index_close(indexRelation, NoLock);
+				continue;
+			}
+
+			/*
 			 * Ignore invalid indexes, since they can't safely be used for
 			 * queries.  Note that this is OK because the data structure we
 			 * are constructing is only used by the planner --- the executor

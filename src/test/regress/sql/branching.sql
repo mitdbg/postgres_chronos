@@ -547,6 +547,18 @@ BEGIN
         RAISE EXCEPTION 'private DML retained interval visibility quals';
     END IF;
     RAISE NOTICE 'private DML visibility quals suppressed';
+
+    plan_text := '';
+    FOR plan_line IN EXECUTE
+        'EXPLAIN (COSTS OFF) SELECT count(*) FROM schema_copy_target'
+    LOOP
+        plan_text := plan_text || plan_line;
+    END LOOP;
+    IF plan_text LIKE '%rowid_low_idx%' OR
+       plan_text LIKE '%writer_rowid_idx%' THEN
+        RAISE EXCEPTION 'SQL planner selected a branch maintenance index';
+    END IF;
+    RAISE NOTICE 'branch maintenance indexes excluded from SQL plans';
 END
 $$;
 
