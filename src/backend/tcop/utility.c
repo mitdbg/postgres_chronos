@@ -1586,7 +1586,7 @@ ProcessUtilitySlow(ParseState *pstate,
 									true,	/* check_not_in_use */
 									false,	/* skip_build */
 									false); /* quiet */
-					BranchFinishIndexStmt(branch_session_lock);
+					BranchFinishIndexDDL(branch_session_lock);
 
 					/*
 					 * Add the CREATE INDEX node itself to stash right away;
@@ -1813,7 +1813,15 @@ ProcessUtilitySlow(ParseState *pstate,
 				break;
 
 			case T_DropStmt:
-				ExecDropStmt((DropStmt *) parsetree, isTopLevel);
+				{
+					DropStmt   *stmt = (DropStmt *) parsetree;
+					bool		branch_session_lock = false;
+
+					if (stmt->removeType == OBJECT_INDEX && isCompleteQuery)
+						branch_session_lock = BranchPrepareDropIndex(stmt);
+					ExecDropStmt(stmt, isTopLevel);
+					BranchFinishIndexDDL(branch_session_lock);
+				}
 				/* no commands stashed for DROP */
 				commandCollected = true;
 				break;

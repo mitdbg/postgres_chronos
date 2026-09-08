@@ -1294,8 +1294,100 @@ BranchPrepareIndexStmt(IndexStmt *stmt)
 	return session_lock_held;
 }
 
+/*
+ * DROP INDEX has no table RangeVar through which relation-version resolution
+ * can run.  Permit it only when the named index belongs to the selected
+ * branch's private physical heap.  This prevents a sibling from dropping an
+ * index by its globally visible physical name and prevents a shared heap's
+ * index from disappearing in every branch.
+ */
+bool
+BranchPrepareDropIndex(DropStmt *stmt)
+{
+	ListCell   *lc;
+	LOCKMODE	index_lockmode;
+	LOCKMODE	heap_lockmode;
+	bool		session_lock_held = false;
+
+	Assert(stmt->removeType == OBJECT_INDEX);
+	if (IsBootstrapProcessingMode() || !IsTransactionState() ||
+		!BranchDatabaseIsEnabled())
+		return false;
+
+	index_lockmode = stmt->concurrent ? ShareUpdateExclusiveLock :
+		AccessExclusiveLock;
+	heap_lockmode = index_lockmode;
+	if (stmt->concurrent)
+	{
+		LOCKTAG		tag;
+
+		SET_LOCKTAG_OBJECT(tag, MyDatabaseId, BranchRelationId, InvalidOid,
+						   BRANCH_CONCURRENT_INDEX_LOCK_SUBID);
+		(void) LockAcquire(&tag, RowExclusiveLock, true, false);
+		session_lock_held = true;
+	}
+
+	foreach(lc, stmt->objects)
+	{
+		RangeVar   *indexrv = makeRangeVarFromNameList(lfirst(lc));
+		Oid			indexoid;
+		Oid			heapoid;
+		Oid			logicaloid;
+		Oid			currentoid;
+		Relation	heaprel;
+		char		relkind;
+
+	retry:
+		indexoid = RangeVarGetRelidExtended(indexrv, NoLock, RVR_MISSING_OK,
+										 NULL, NULL);
+		if (!OidIsValid(indexoid))
+			continue;
+		relkind = get_rel_relkind(indexoid);
+		if (relkind != RELKIND_INDEX && relkind != RELKIND_PARTITIONED_INDEX)
+			continue;
+		heapoid = IndexGetRelation(indexoid, true);
+		if (!OidIsValid(heapoid))
+			continue;
+
+		/* Match RemoveRelations()'s table-before-index lock order. */
+		LockRelationOid(heapoid, heap_lockmode);
+		LockRelationOid(indexoid, index_lockmode);
+		if (RangeVarGetRelidExtended(indexrv, NoLock, RVR_MISSING_OK,
+										 NULL, NULL) != indexoid)
+		{
+			UnlockRelationOid(indexoid, index_lockmode);
+			UnlockRelationOid(heapoid, heap_lockmode);
+			goto retry;
+		}
+
+		heaprel = table_open(heapoid, NoLock);
+		if (!BranchRelationIsVersioned(heaprel))
+		{
+			table_close(heaprel, NoLock);
+			continue;
+		}
+
+		BranchAcquireLock(RowExclusiveLock);
+		logicaloid = BranchLogicalRelationOid(heapoid);
+		currentoid = branch_relation_for_point(logicaloid, &MyBranchPoint);
+		if (currentoid != heapoid)
+			ereport(ERROR,
+					(errcode(ERRCODE_UNDEFINED_OBJECT),
+					 errmsg("index \"%s\" does not exist in branch \"%s\"",
+							indexrv->relname, branch_name)));
+		if (!branch_relation_is_private_cached(heaprel))
+			ereport(ERROR,
+					(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
+					 errmsg("cannot drop index \"%s\" from a shared branch schema",
+							indexrv->relname),
+					 errhint("Create a private schema version with ALTER TABLE, then retry DROP INDEX.")));
+		table_close(heaprel, NoLock);
+	}
+	return session_lock_held;
+}
+
 void
-BranchFinishIndexStmt(bool session_lock_held)
+BranchFinishIndexDDL(bool session_lock_held)
 {
 	LOCKTAG		tag;
 

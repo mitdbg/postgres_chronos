@@ -398,6 +398,7 @@ CREATE INDEX IF NOT EXISTS branch_index_source_idx
 SELECT count(*) = 0 AS index_noop_avoids_schema_copy
 FROM pg_branch_relversion
 WHERE brvlogical = 'branch_index_target'::regclass;
+DROP INDEX branch_index_source_idx;
 BEGIN;
 UPDATE accounts SET balance = balance WHERE id = -1;
 SELECT count(*) > 0 AS forked_heap_uses_logical_locks
@@ -450,6 +451,10 @@ JOIN pg_attribute a ON a.attrelid = i.indrelid
                    AND a.attnum = i.indkey[0]
 WHERE i.indrelid = 'branch_index_target'::regclass
   AND a.attname = 'dev_value';
+CREATE INDEX branch_index_drop_idx ON branch_index_target (id);
+DROP INDEX branch_index_drop_idx;
+CREATE INDEX branch_index_concurrent_drop_idx ON branch_index_target (id);
+DROP INDEX CONCURRENTLY branch_index_concurrent_drop_idx;
 
 COPY copy_target FROM STDIN WITH (FORMAT csv);
 2,dev
@@ -681,6 +686,7 @@ JOIN pg_attribute a ON a.attrelid = i.indrelid
                    AND a.attnum = i.indkey[0]
 WHERE i.indrelid = 'branch_index_target'::regclass
   AND a.attname = 'dev_value';
+DROP INDEX branch_index_dev_idx;
 SELECT count(*) AS bulk_main_rows
 FROM bulk_update_target WHERE value = 1;
 SELECT string_agg(column_name::text, ',' ORDER BY ordinal_position)

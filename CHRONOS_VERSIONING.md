@@ -501,13 +501,15 @@ Stop the example server with the following command.
 ### 5.1 Schema and database records
 
 Branch-local schema copying currently covers `ALTER TABLE` and `CREATE INDEX`
-on ordinary, nonpartitioned heap tables. Relation creation, deletion, rename,
-and standalone index deletion still use shared PostgreSQL catalogs. Partition
-topology, schemas, views, rules, triggers, foreign-key dependency closure,
-ownership, ACLs, comments, and extension metadata do not yet receive complete
-per-branch copies. `CREATE TABLE ... LIKE` also omits several dependent
-records, so a DDL operation that creates a physical table does not reproduce
-every trigger, rule, ACL, or dependency of the source.
+on ordinary, nonpartitioned heap tables. `DROP INDEX` works on a private
+physical version; it rejects shared or sibling physical indexes instead of
+changing another branch. Relation creation, deletion, and rename still use
+shared PostgreSQL catalogs. Partition topology, schemas, views, rules,
+triggers, foreign-key dependency closure, ownership, ACLs, comments, and
+extension metadata do not yet receive complete per-branch copies. `CREATE
+TABLE ... LIKE` also omits several dependent records, so a DDL operation that
+creates a physical table does not reproduce every trigger, rule, ACL, or
+dependency of the source.
 
 Sequences remain global, including serial and identity sequences. Temporary
 tables, large objects, materialized views, and foreign tables are outside the

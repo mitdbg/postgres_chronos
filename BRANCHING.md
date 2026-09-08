@@ -172,9 +172,11 @@ commit. A concurrent index build on an existing private table does not make
 the index visible to sibling branches. `CREATE BRANCH` reports a retryable
 error if it overlaps that build.
 
-Relation creation, deletion, rename, and standalone index deletion do not yet
-provide complete branch-local schema semantics. Keep those operations outside
-workflows that require independent schemas.
+`DROP INDEX` is accepted when the selected branch owns a private physical
+table. It is rejected on a shared table, where dropping the physical index
+would affect another branch; apply a branch-local `ALTER TABLE` first if the
+index must be removed. Relation creation, deletion, and rename do not yet
+provide complete branch-local schema semantics.
 
 ## 6. Inspect branches
 
