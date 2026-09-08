@@ -2285,16 +2285,21 @@ fireRIRrules(Query *parsetree, List *activeRIRs)
 			Expr	   *highqual;
 			Expr	   *deletedqual;
 
-			private_relation = BranchRelationCanModifyInPlace(rel);
+			if (rt_index == parsetree->resultRelation &&
+				(parsetree->commandType == CMD_UPDATE ||
+				 parsetree->commandType == CMD_DELETE ||
+				 parsetree->commandType == CMD_MERGE))
+				private_relation = BranchRelationCanModifyInPlace(rel);
+			else
+				private_relation = BranchRelationCanReadInPlace(rel);
 			if (private_relation)
 			{
 				/*
-				 * The transaction-scoped branch lock prevents a concurrent fork,
-				 * and exact schema ownership guarantees every physical row belongs
-				 * to this branch.  Reads and writes can therefore use PostgreSQL's
-				 * native plans without an interval filter.  CREATE BRANCH broadcasts
-				 * relcache invalidation before a cached private plan can be reused
-				 * against a newly shared version.
+				 * Exact schema ownership guarantees every physical row belongs to
+				 * this branch.  Writers hold a transaction-scoped guard against a
+				 * concurrent fork; readers rely on their active MVCC snapshot.
+				 * CREATE BRANCH broadcasts relcache invalidation before a cached
+				 * private plan can be reused against a newly shared version.
 				 */
 				securityQuals = NIL;
 				goto branch_quals_done;

@@ -226,6 +226,7 @@ static void
 branch_cache_relcache_callback(Datum arg, Oid relid)
 {
 	BranchRelationMapCacheValid = false;
+	branch_reset_private_dml_cache();
 }
 
 static void
@@ -530,25 +531,13 @@ branch_reset_private_dml_cache(void)
 	BranchSharedDmlRelations = NIL;
 }
 
-/*
- * A copied physical schema version can use PostgreSQL's ordinary in-place
- * UPDATE/DELETE machinery while exactly one active branch resolves to it.
- * ExecutorStart already takes RowExclusiveLock on that branch before rows are
- * visited.  CREATE BRANCH takes ShareRowExclusiveLock, so the answer cannot
- * become stale until this transaction ends (same-transaction topology changes
- * explicitly clear the cache).
- */
-bool
-BranchRelationCanModifyInPlace(Relation relation)
+static bool
+branch_relation_is_private_cached(Relation relation)
 {
 	Oid			physicalrelid = RelationGetRelid(relation);
 	Oid			logicalrelid;
 	bool		is_private;
 	MemoryContext oldcontext;
-
-	if (!BranchRelationIsVersioned(relation))
-		return false;
-	BranchAcquireLock(RowExclusiveLock);
 
 	if (BranchPrivateDmlLxid != MyProc->vxid.lxid ||
 		BranchPrivateDmlBranchId != MyBranchId)
@@ -576,6 +565,37 @@ BranchRelationCanModifyInPlace(Relation relation)
 			lappend_oid(BranchSharedDmlRelations, physicalrelid);
 	MemoryContextSwitchTo(oldcontext);
 	return is_private;
+}
+
+/*
+ * A copied physical schema version can use PostgreSQL's ordinary in-place
+ * UPDATE/DELETE machinery while exactly one active branch resolves to it.
+ * ExecutorStart takes RowExclusiveLock on that branch before rows are visited.
+ * CREATE BRANCH takes ShareRowExclusiveLock, so the answer cannot become stale
+ * until this transaction ends.
+ */
+bool
+BranchRelationCanModifyInPlace(Relation relation)
+{
+	if (!BranchRelationIsVersioned(relation))
+		return false;
+	BranchAcquireLock(RowExclusiveLock);
+	return branch_relation_is_private_cached(relation);
+}
+
+/*
+ * A read needs no branch lock while its snapshot is active.  If a concurrent
+ * fork commits after the private check, that snapshot cannot see child writes.
+ * The fork's relcache invalidation discards both cached plans and this cache
+ * before a later command can use a newer snapshot.
+ */
+bool
+BranchRelationCanReadInPlace(Relation relation)
+{
+	if (!BranchRelationIsVersioned(relation))
+		return false;
+	BranchEnsureSession();
+	return branch_relation_is_private_cached(relation);
 }
 
 static bool
