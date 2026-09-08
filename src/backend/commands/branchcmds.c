@@ -47,6 +47,7 @@
 #include "parser/parse_utilcmd.h"
 #include "parser/parser.h"
 #include "postmaster/bgworker.h"
+#include "storage/lock.h"
 #include "storage/lmgr.h"
 #include "storage/ipc.h"
 #include "storage/proc.h"
@@ -78,8 +79,15 @@ static LocalTransactionId BranchRelationLockLxid = InvalidLocalTransactionId;
 static List *BranchRelationWriteLocks = NIL;
 static List *BranchBulkWriteLocks = NIL;
 
-/* Above this estimate, one relation lock replaces per-row heavyweight locks. */
-#define BRANCH_ROW_LOCK_ESCALATION_THRESHOLD 1024
+/*
+ * Bound one statement's estimated row-lock footprint.  Branch visibility
+ * predicates make planner row estimates deliberately conservative, so leave
+ * most of the configured per-transaction lock allowance for that error and
+ * for ordinary PostgreSQL locks.  The cap also protects installations with a
+ * very large max_locks_per_transaction setting from an oversized estimate.
+ */
+#define BRANCH_ROW_LOCK_ESCALATION_CAP 1024
+#define BRANCH_ROW_LOCK_BUDGET_DIVISOR 4
 
 static HeapTuple lookup_branch(const char *name, bool missing_ok);
 static void require_database_privilege(AclMode mode);
@@ -1666,12 +1674,16 @@ BranchPrepareExecutorLocks(PlannedStmt *plannedstmt)
 {
 	Plan	   *plan = plannedstmt->planTree;
 	double		estimated_rows = plan ? plan->plan_rows : 0;
+	int			row_lock_threshold;
 	bool		bulk = false;
 	List	   *logicalrelids = NIL;
 	MemoryContext oldcontext;
 	int			rti = -1;
 	ListCell   *lc;
 
+	row_lock_threshold = Min(BRANCH_ROW_LOCK_ESCALATION_CAP,
+							 Max(1, max_locks_per_xact /
+								 BRANCH_ROW_LOCK_BUDGET_DIVISOR));
 	if (plan && IsA(plan, ModifyTable))
 	{
 		ModifyTable *modify = (ModifyTable *) plan;
@@ -1679,7 +1691,7 @@ BranchPrepareExecutorLocks(PlannedStmt *plannedstmt)
 		if (outerPlan(plan))
 			estimated_rows = outerPlan(plan)->plan_rows;
 		bulk = modify->operation != CMD_INSERT &&
-			estimated_rows >= BRANCH_ROW_LOCK_ESCALATION_THRESHOLD;
+			estimated_rows >= row_lock_threshold;
 	}
 
 	while ((rti = bms_next_member(plannedstmt->resultRelationRelids, rti)) >= 0)
