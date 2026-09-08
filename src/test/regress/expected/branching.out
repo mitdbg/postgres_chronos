@@ -176,6 +176,26 @@ DROP TABLE branch_typed_table;
 DROP TYPE branch_typed_row;
 ALTER TABLE IF EXISTS branch_missing_table ADD COLUMN value integer;
 NOTICE:  relation "branch_missing_table" does not exist, skipping
+CREATE TABLE branch_partitioned (id integer) PARTITION BY RANGE (id);
+SET default_tablespace TO pg_global;
+CREATE TABLE branch_partitioned_p0 PARTITION OF branch_partitioned
+  FOR VALUES FROM (0) TO (10) TABLESPACE pg_default;
+RESET default_tablespace;
+SELECT count(*) AS partitioned_root_storage_indexes
+FROM pg_index WHERE indrelid = 'branch_partitioned'::regclass;
+ partitioned_root_storage_indexes 
+----------------------------------
+                                0
+(1 row)
+
+SELECT count(*) AS partition_leaf_storage_indexes
+FROM pg_index WHERE indrelid = 'branch_partitioned_p0'::regclass;
+ partition_leaf_storage_indexes 
+--------------------------------
+                              2
+(1 row)
+
+DROP TABLE branch_partitioned;
 CREATE TABLE parent_fk (id integer PRIMARY KEY);
 CREATE TABLE child_fk
 (

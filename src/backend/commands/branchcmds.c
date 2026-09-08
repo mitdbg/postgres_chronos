@@ -39,6 +39,7 @@
 #include "commands/branchcmds.h"
 #include "commands/defrem.h"
 #include "commands/sequence.h"
+#include "commands/tablespace.h"
 #include "executor/executor.h"
 #include "executor/spi.h"
 #include "miscadmin.h"
@@ -2741,12 +2742,16 @@ branch_add_storage_index(Oid relid, const char *first, const char *second)
 	ListCell   *lc;
 	AttrNumber	firstattnum;
 	AttrNumber	secondattnum;
+	Oid			tablespace;
 	IndexStmt  *index = makeNode(IndexStmt);
 	IndexElem  *firstelem = makeNode(IndexElem);
 	IndexElem  *secondelem = makeNode(IndexElem);
 
 	/* CREATE TABLE's branch transform may already have synthesized it. */
 	heaprel = table_open(relid, AccessShareLock);
+	tablespace = heaprel->rd_rel->reltablespace;
+	if (!OidIsValid(tablespace))
+		tablespace = MyDatabaseTableSpace;
 	firstattnum = get_attnum(relid, first);
 	secondattnum = get_attnum(relid, second);
 	indexes = RelationGetIndexList(heaprel);
@@ -2793,6 +2798,7 @@ branch_add_storage_index(Oid relid, const char *first, const char *second)
 									 get_rel_namespace(relid), false);
 	index->relation = branch_relation_rangevar(relid, false);
 	index->accessMethod = pstrdup(DEFAULT_INDEX_TYPE);
+	index->tableSpace = get_tablespace_name(tablespace);
 	index->indexParams = list_make2(firstelem, secondelem);
 	branch_process_utility((Node *) index);
 }
@@ -2812,9 +2818,8 @@ BranchCreateStorageIndexes(Oid relid)
 	relkind = relation->rd_rel->relkind;
 	versioned = BranchRelationIsVersioned(relation);
 	table_close(relation, AccessShareLock);
-	if (!versioned ||
-		(relkind != RELKIND_RELATION &&
-		 relkind != RELKIND_PARTITIONED_TABLE))
+	/* Partitioned roots contain no tuples; their leaf indexes do the work. */
+	if (!versioned || relkind != RELKIND_RELATION)
 		return;
 
 	branch_add_storage_index(relid, BRANCH_ROWID_ATTRIBUTE_NAME,
