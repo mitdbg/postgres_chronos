@@ -117,6 +117,11 @@ WHERE i.indrelid = 'branch_like_copy'::regclass;
 (1 row)
 
 DROP TABLE branch_like_source, branch_like_copy;
+CREATE TABLE branch_error_detail (id integer CHECK (id > 0));
+INSERT INTO branch_error_detail VALUES (-1);
+ERROR:  new row for relation "branch_error_detail" violates check constraint "branch_error_detail_id_check"
+DETAIL:  Failing row contains (-1).
+DROP TABLE branch_error_detail;
 CREATE TABLE parent_fk (id integer PRIMARY KEY);
 CREATE TABLE child_fk
 (

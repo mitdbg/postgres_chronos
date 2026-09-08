@@ -2513,8 +2513,8 @@ ExecBuildSlotValueDescription(Oid reloid,
 		int			vallen;
 		Form_pg_attribute att = TupleDescAttr(tupdesc, i);
 
-		/* ignore dropped columns */
-		if (att->attisdropped)
+		/* ignore columns that are not part of the user-visible row */
+		if (att->attisdropped || att->attishidden)
 			continue;
 
 		if (!table_perm)

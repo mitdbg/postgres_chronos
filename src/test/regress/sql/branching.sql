@@ -79,6 +79,10 @@ JOIN pg_attribute a1 ON a1.attrelid = i.indrelid
 WHERE i.indrelid = 'branch_like_copy'::regclass;
 DROP TABLE branch_like_source, branch_like_copy;
 
+CREATE TABLE branch_error_detail (id integer CHECK (id > 0));
+INSERT INTO branch_error_detail VALUES (-1);
+DROP TABLE branch_error_detail;
+
 CREATE TABLE parent_fk (id integer PRIMARY KEY);
 CREATE TABLE child_fk
 (
