@@ -116,6 +116,8 @@ static Oid branch_relation_for_point(Oid logicalrelid,
 									 const BranchCoordinate *point);
 static bool branch_schema_version_is_private(Oid logicalrelid,
 										 Oid physicalrelid);
+static bool branch_physical_version_is_private(Oid logicalrelid,
+										   Oid physicalrelid);
 static void branch_reset_private_dml_cache(void);
 static Oid branch_clone_relation(Oid logicalrelid, Oid sourcerelid,
 								 Oid versionid);
@@ -500,6 +502,23 @@ branch_schema_version_is_private(Oid logicalrelid, Oid physicalrelid)
 	return is_private;
 }
 
+/* The caller must hold a branch lock that prevents a concurrent fork. */
+static bool
+branch_physical_version_is_private(Oid logicalrelid, Oid physicalrelid)
+{
+	if (logicalrelid == physicalrelid)
+	{
+		/* A split interval can never become the full interval again. */
+		return MyBranchLow.hi == 0 && MyBranchLow.lo == 0 &&
+			MyBranchHigh.hi == PG_UINT64_MAX &&
+			MyBranchHigh.lo == PG_UINT64_MAX;
+	}
+
+	return branch_relation_for_point(logicalrelid,
+									 &MyBranchPoint) == physicalrelid &&
+		branch_schema_version_is_private(logicalrelid, physicalrelid);
+}
+
 static void
 branch_reset_private_dml_cache(void)
 {
@@ -543,23 +562,8 @@ BranchRelationCanModifyInPlace(Relation relation)
 		return false;
 
 	logicalrelid = BranchLogicalRelationOid(physicalrelid);
-	if (logicalrelid == physicalrelid)
-	{
-		/*
-		 * The original heap is private until the first fork consumes part of
-		 * its full coordinate interval.  Forking is serialized by the branch
-		 * lock acquired above, and the allocator never reconstructs the full
-		 * interval after it has been split.
-		 */
-		is_private = MyBranchLow.hi == 0 && MyBranchLow.lo == 0 &&
-			MyBranchHigh.hi == PG_UINT64_MAX &&
-			MyBranchHigh.lo == PG_UINT64_MAX;
-	}
-	else
-		is_private =
-			branch_relation_for_point(logicalrelid,
-									  &MyBranchPoint) == physicalrelid &&
-			branch_schema_version_is_private(logicalrelid, physicalrelid);
+	is_private = branch_physical_version_is_private(logicalrelid,
+												 physicalrelid);
 
 	oldcontext = MemoryContextSwitchTo(TopTransactionContext);
 	if (is_private)
@@ -1139,7 +1143,7 @@ BranchPrepareAlterTable(AlterTableStmt *stmt, LOCKMODE lockmode)
 	table_close(sourcerel, NoLock);
 
 	branch_ensure_indexes_ready(sourcerelid);
-	if (branch_schema_version_is_private(logicalrelid, sourcerelid))
+	if (branch_physical_version_is_private(logicalrelid, sourcerelid))
 		return;
 
 	versionrel = table_open(BranchRelVersionRelationId, RowExclusiveLock);

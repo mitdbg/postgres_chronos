@@ -194,6 +194,9 @@ WHERE attrelid IN ('accounts'::regclass,
                    'measurements_high'::regclass)
   AND attishidden;
 
+SELECT count(*) = 0 AS pristine_ddl_stayed_in_place
+FROM pg_branch_relversion;
+
 BEGIN;
 UPDATE accounts SET balance = balance WHERE id = -1;
 SELECT count(*) = 0 AS pristine_heap_uses_private_dml
