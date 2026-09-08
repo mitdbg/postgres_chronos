@@ -363,6 +363,13 @@ WHERE attrelid IN ('accounts'::regclass,
 SELECT count(*) = 0 AS pristine_ddl_stayed_in_place
 FROM pg_branch_relversion;
 
+-- Private versions use PostgreSQL's native unique-index build and probe paths.
+CREATE TABLE private_invalid_unique (id integer);
+INSERT INTO private_invalid_unique VALUES (1), (1);
+CREATE UNIQUE INDEX private_invalid_unique_idx ON private_invalid_unique (id);
+DROP TABLE private_invalid_unique;
+INSERT INTO accounts VALUES (3, 'one@example.test', 30);
+
 BEGIN;
 UPDATE accounts SET balance = balance WHERE id = -1;
 SELECT count(*) = 0 AS pristine_heap_uses_private_dml

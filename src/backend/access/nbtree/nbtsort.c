@@ -306,15 +306,26 @@ btbuild(Relation heap, Relation index, IndexInfo *indexInfo)
 	IndexBuildResult *result;
 	BTBuildState buildstate;
 	double		reltuples;
+	bool		versioned;
+	bool		private_version = false;
 
 #ifdef BTREE_BUILD_STATS
 	if (log_btree_build_stats)
 		ResetUsage();
 #endif							/* BTREE_BUILD_STATS */
 
-	/* Disjoint branch intervals may legitimately carry duplicate keys. */
+	/*
+	 * Disjoint branch intervals may legitimately carry duplicate keys.  A
+	 * private physical version cannot contain such intervals, however, and
+	 * the branch write lock prevents a concurrent fork for the duration of
+	 * this transaction.  Let tuplesort use PostgreSQL's normal one-pass
+	 * uniqueness check in that common case.
+	 */
+	versioned = BranchRelationIsVersioned(heap);
+	if (versioned)
+		private_version = BranchRelationCanModifyInPlace(heap);
 	buildstate.isunique = indexInfo->ii_Unique &&
-		!BranchRelationIsVersioned(heap);
+		(!versioned || private_version);
 	buildstate.nulls_not_distinct = indexInfo->ii_NullsNotDistinct;
 	buildstate.havedead = false;
 	buildstate.heap = heap;
@@ -339,7 +350,8 @@ btbuild(Relation heap, Relation index, IndexInfo *indexInfo)
 	 * levels.  Finally, it may also be necessary to end use of parallelism.
 	 */
 	_bt_leafbuild(buildstate.spool, buildstate.spool2);
-	if (indexInfo->ii_Unique && BranchRelationIsVersioned(heap) &&
+	if (indexInfo->ii_Unique && versioned &&
+		!private_version &&
 		!ReindexIsProcessingIndex(RelationGetRelid(index)))
 		btvalidatebranchuniqueness(heap, index, indexInfo);
 	_bt_spooldestroy(buildstate.spool);

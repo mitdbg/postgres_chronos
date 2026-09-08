@@ -725,9 +725,19 @@ check_exclusion_or_unique_constraint(Relation heap, Relation index,
 	int			i;
 	bool		conflict;
 	bool		found_self;
+	bool		filter_branch_versions;
 	ExprContext *econtext;
 	TupleTableSlot *existing_slot;
 	TupleTableSlot *save_scantuple;
+
+	/*
+	 * Writers on a private physical version hold the branch lock that excludes
+	 * a concurrent fork.  Every physical tuple is consequently part of the
+	 * current SQL snapshot, so avoid evaluating hidden interval metadata for
+	 * each candidate returned by the constraint index.
+	 */
+	filter_branch_versions = BranchRelationIsVersioned(heap) &&
+		!BranchRelationCanModifyInPlace(heap);
 
 	if (indexInfo->ii_ExclusionOps)
 	{
@@ -855,7 +865,8 @@ retry:
 		}
 
 		/* Physical versions outside this branch cannot violate its constraint. */
-		if (!BranchTupleSlotIsVisible(heap, existing_slot))
+		if (filter_branch_versions &&
+			!BranchTupleSlotIsVisible(heap, existing_slot))
 			continue;
 
 		/*

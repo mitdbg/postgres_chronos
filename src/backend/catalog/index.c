@@ -3280,7 +3280,8 @@ IndexCheckExclusion(Relation heapRelation,
 
 	/* Set up execution state for predicate, if any. */
 	predicate = ExecPrepareQual(indexInfo->ii_Predicate, estate);
-	versioned = BranchRelationIsVersioned(heapRelation);
+	versioned = BranchRelationIsVersioned(heapRelation) &&
+		!BranchRelationCanModifyInPlace(heapRelation);
 	if (versioned)
 	{
 		BranchEnsureSession();
@@ -3900,6 +3901,7 @@ reindex_index(const ReindexStmt *stmt, Oid indexId,
 	ResetReindexProcessing();
 	if (!skip_constraint_checks && indexInfo->ii_Unique &&
 		BranchRelationIsVersioned(heapRelation) &&
+		!BranchRelationCanModifyInPlace(heapRelation) &&
 		iRel->rd_rel->relam == BTREE_AM_OID)
 		btvalidatebranchuniqueness(heapRelation, iRel, indexInfo);
 

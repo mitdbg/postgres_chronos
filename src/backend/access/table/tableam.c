@@ -278,7 +278,14 @@ table_index_fetch_tuple_check_branch(Relation rel,
 	bool		found = false;
 	bool		version_all_dead = false;
 
-	if (!BranchRelationIsVersioned(rel))
+	/*
+	 * A private physical version has no interval alternatives to inspect.
+	 * Its writer holds the branch lock that excludes a concurrent fork, so
+	 * use the native single-fetch path and avoid materializing a slot for
+	 * every equal index key.
+	 */
+	if (!BranchRelationIsVersioned(rel) ||
+		BranchRelationCanModifyInPlace(rel))
 		return table_index_fetch_tuple_check(rel, tid, snapshot, all_dead);
 
 	if (all_dead)
