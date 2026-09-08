@@ -1109,7 +1109,17 @@ ExecInsert(ModifyTableContext *context,
 	if (branch_versioned)
 	{
 		BranchAcquireLock(RowExclusiveLock);
-		branch_rowid = BranchTupleRowId(resultRelationDesc, slot);
+		/*
+		 * Temporal leftovers are new logical rows, even though PostgreSQL
+		 * constructs them by copying the row being split.  Keeping that copied
+		 * row ID would make two or more current tuples aliases of one logical
+		 * row.  The updated portion retains the original identity through the
+		 * UPDATE path; each untouched portion gets its own identity here.
+		 */
+		if (node->forPortionOf && mtstate->operation == CMD_INSERT)
+			branch_rowid = BranchNextRowId();
+		else
+			branch_rowid = BranchTupleRowId(resultRelationDesc, slot);
 	}
 
 	/*

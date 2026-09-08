@@ -149,6 +149,23 @@ FETCH ALL FROM branch_cursor;
 COMMIT;
 DROP TABLE branch_serial_cursor;
 
+SET datestyle TO ISO, YMD;
+CREATE TABLE branch_temporal_split
+(
+  id integer,
+  valid_at daterange,
+  value text
+);
+INSERT INTO branch_temporal_split
+VALUES (1, '[2020-01-01,2030-01-01)', 'before');
+UPDATE branch_temporal_split
+  FOR PORTION OF valid_at FROM '2022-01-01' TO '2024-01-01'
+  SET value = 'during';
+SELECT valid_at, value FROM branch_temporal_split
+ORDER BY valid_at FOR UPDATE;
+DROP TABLE branch_temporal_split;
+RESET datestyle;
+
 CREATE TABLE parent_fk (id integer PRIMARY KEY);
 CREATE TABLE child_fk
 (
