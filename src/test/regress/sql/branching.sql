@@ -30,6 +30,17 @@ $$;
 SELECT email AS plpgsql_result_hides_metadata
 FROM make_accounts_plpgsql();
 DROP FUNCTION make_accounts_plpgsql();
+CREATE FUNCTION assign_account_plpgsql() RETURNS text
+LANGUAGE plpgsql AS $$
+DECLARE
+    account accounts;
+BEGIN
+    SELECT 6, 'six@example.test'::text, 60 INTO account;
+    RETURN account.email;
+END
+$$;
+SELECT assign_account_plpgsql() AS plpgsql_assignment_hides_metadata;
+DROP FUNCTION assign_account_plpgsql();
 
 CREATE TABLE parent_fk (id integer PRIMARY KEY);
 CREATE TABLE child_fk

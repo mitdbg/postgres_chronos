@@ -7364,10 +7364,18 @@ exec_move_row_from_fields(PLpgSQL_execstate *estate,
 					/* expanded_record_set_fields should ignore this column */
 					continue;	/* skip dropped column in record */
 				}
+				if (attr->attishidden)
+				{
+					/* Hidden storage columns are not assignment targets. */
+					newvalues[fnum] = (Datum) 0;
+					newnulls[fnum] = true;
+					continue;
+				}
 
 				while (anum < td_natts &&
-					   TupleDescAttr(tupdesc, anum)->attisdropped)
-					anum++;		/* skip dropped column in tuple */
+					   (TupleDescAttr(tupdesc, anum)->attisdropped ||
+						TupleDescAttr(tupdesc, anum)->attishidden))
+					anum++;		/* skip non-logical columns in tuple */
 
 				if (anum < td_natts)
 				{
@@ -7415,9 +7423,10 @@ exec_move_row_from_fields(PLpgSQL_execstate *estate,
 			 */
 			if (strict_multiassignment_level && anum < td_natts)
 			{
-				/* skip dropped columns in the source descriptor */
+				/* skip non-logical columns in the source descriptor */
 				while (anum < td_natts &&
-					   TupleDescAttr(tupdesc, anum)->attisdropped)
+					   (TupleDescAttr(tupdesc, anum)->attisdropped ||
+						TupleDescAttr(tupdesc, anum)->attishidden))
 					anum++;
 
 				if (anum < td_natts)
@@ -7475,8 +7484,9 @@ exec_move_row_from_fields(PLpgSQL_execstate *estate,
 			var = (PLpgSQL_var *) (estate->datums[row->varnos[fnum]]);
 
 			while (anum < td_natts &&
-				   TupleDescAttr(tupdesc, anum)->attisdropped)
-				anum++;			/* skip dropped column in tuple */
+				   (TupleDescAttr(tupdesc, anum)->attisdropped ||
+					TupleDescAttr(tupdesc, anum)->attishidden))
+				anum++;			/* skip non-logical column in tuple */
 
 			if (anum < td_natts)
 			{
@@ -7517,8 +7527,9 @@ exec_move_row_from_fields(PLpgSQL_execstate *estate,
 		if (strict_multiassignment_level && anum < td_natts)
 		{
 			while (anum < td_natts &&
-				   TupleDescAttr(tupdesc, anum)->attisdropped)
-				anum++;			/* skip dropped column in tuple */
+				   (TupleDescAttr(tupdesc, anum)->attisdropped ||
+					TupleDescAttr(tupdesc, anum)->attishidden))
+				anum++;			/* skip non-logical column in tuple */
 
 			if (anum < td_natts)
 				ereport(strict_multiassignment_level,
