@@ -16,13 +16,13 @@ docker run --name chronos-postgres \
   zxjcarrot/chronos-postgres:19
 ```
 
-Connect with `psql`, enable branching, and create a branch:
+In images built from the current source, new databases have branching enabled.
+Connect with `psql` and create a branch:
 
 ```sql
 CREATE TABLE accounts (id bigint PRIMARY KEY, balance bigint NOT NULL);
 INSERT INTO accounts VALUES (1, 100);
 
-SELECT pg_branch_enable();
 CREATE BRANCH dev FROM main;
 SET BRANCH dev;
 UPDATE accounts SET balance = 75 WHERE id = 1;
